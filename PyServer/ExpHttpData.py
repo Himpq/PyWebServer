@@ -55,7 +55,6 @@ def updata_exp(connf, bd,l = 4096):
 
     connf.close()
     data = exp_updata(caf, bd)
-    print("Updata", data)
     return data
 
 
@@ -117,7 +116,8 @@ def exp_updata(file, bd):
             else:
                 ctx = b''
                 while 1:
-                    d = file.readline()
+                    dx = file.readline()
+                    d = dx
                     if d[len(d)-len(bd)-2:] == bd+b'\r\n':
                         file.seek(-len(bd)-2, 1)
                         break
@@ -125,7 +125,8 @@ def exp_updata(file, bd):
                         file.seek(-len(bd)-4, 1)
                         stop = True
                         break
-                    
+                    elif dx == b'':
+                        break
                     ctx += d
                     
                 datas[header.get('content-disposition')['name']] = ctx.decode()
@@ -366,22 +367,28 @@ def exp(connf):
         a = connf 
 
         @profile
-        def x():
+        def xs():
             nonlocal content, headers, a
-            while not content[-4:] == b'\r\n\r\n':
-                ctx = a.readline()
-                xx = exp_headers(ctx.decode())
-                if len(xx) == 3:
-                    headers[xx[0][0]] = xx[0][1]
-                    headers[xx[1][0]] = xx[1][1]
-                else:
-                    headers[xx[0]] = xx[1]
-                if xx == b'':
-                    break
+            try:
+                while not content[-4:] == b'\r\n\r\n':
+                    ctx = a.readline()
+                    
+                    xx = exp_headers(ctx.decode())
+                    if len(xx) == 3:
+                        headers[xx[0][0]] = xx[0][1]
+                        headers[xx[1][0]] = xx[1][1]
+                    else:
+                        headers[xx[0]] = xx[1]
+                    if xx == b'':
+                        break
 
-                content += ctx
-
-        x()
+                    content += ctx
+            except Exception as e:
+                print("An error in exp http data:",e)
+                content = b''
+            
+                
+        xs()
 
         if headers.get("content-type", "") == 'application/x-www-form-urlencoded':
             if headers.get("method", "") == "POST":

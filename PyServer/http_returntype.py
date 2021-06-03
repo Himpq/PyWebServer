@@ -1,9 +1,11 @@
 return_filetype = {           #返回某文件后缀时的类型
     "text.html"               : ['html', 'htm', 'py', 'jsp'],
     "text.xml"                : ['xml', '323', 'biz', 'cml'],
-    "text.plain"              : ['txt', 'text', 'css', 'js'],
+    "text.plain"              : ['txt', 'text'],
     'text.asp'                : ['asp'],
     'text.csv'                : ['csv'],
+    'text.css'                : ['css'],
+    'text.javascript'         : ['js'],
     
     "image.png"               : ['png'],
     'image.jpeg'              : ['jpg', 'jpeg', 'jfif', 'jpe'],
@@ -16,7 +18,7 @@ return_filetype = {           #返回某文件后缀时的类型
     
     'application.msword'      : ['doc', 'docx'],
     'application.pdf'         : ['pdf'],
-    'application.octet-stream': ['exe', 'bat'],
+    'application.octet-stream': ['exe', 'bat', 'mp3'],
     'application.json'        : ['json'],
     'application.ogg'         : ['ogg'],
     'application.font-woff'   : ['woff'],
@@ -25,7 +27,7 @@ return_filetype = {           #返回某文件后缀时的类型
     'application.vnd.android.package-archive' : ['apk'],
 
     'audio.mp2'               : ['mp2'],
-    'audio.mp3'               : ['mp3'],
+    #'audio.mp3'               : ['mp3'],
     'audio.mp4'               : ['mp4'],
     'audio.mp1'               : ['mp1'],
     'audio.rn-mpeg'           : ['mpga'],

@@ -55,7 +55,10 @@ class cachefile:
             while not r==b'':
                 f.write(r)
                 r = self.read(1024*4)
-                
+        self.file.close()
+        os.remove(self.path)
+        self.file = open(path, 'ab+')
+        self.path = path
             
     def delete(self, length):
         """delete length(end)"""
