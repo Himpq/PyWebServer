@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 """
-    PyServer
-    By Himpq|2020-10-12
+    PyWebServer
+    By Himpq| Created in 2020-10-12
 """
 from threading import Thread
 from Logger import Logger
@@ -38,8 +38,8 @@ def profile(func):
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
-SERVER = "PyServer"
-VERSION = "/2.1.31"
+SERVER = "PyWebServer"
+VERSION = "/3.1"
 
 
 def gzip_encode(data):
@@ -63,7 +63,7 @@ class Server:
 
     def open_SSL(self):
         self.ssl = True
-        self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+        self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23) #SSLv23
         self.ssl_context.load_cert_chain(certfile=sslpath[0], keyfile=sslpath[1])
         #self.ssl_context.load_verify_locations(sslpath[2])
         #self.ssl_context.verify_mode = ssl.CERT_REQUIRED
@@ -79,8 +79,7 @@ class Server:
             try:
                 conn, addr = self.socket.accept()
                 if self.ssl:
-                    co = conn
-                    conn = self.ssl_context.wrap_socket(co, server_side=True)
+                    conn = self.ssl_context.wrap_socket(conn, server_side=True)
                 se = ServerResponse
                 arg = se(conn, addr, ident, self)
                 user = Thread(target=arg.response)
@@ -115,6 +114,7 @@ class Server:
         self.socket = socket.socket()
         self.socket.bind((self.ip, self.port))
         self.socket.listen(self.maxlisten)
+        
         self.accept_thread = Thread(target=self._accept)
         self.accept_thread.start()
         self.clear_thread = Thread(target=self._res)
@@ -199,9 +199,9 @@ class ServerResponse:
             return
         Logger.info("请求路径: ", data['host'] + data['path'])
 
-        if not data.get("host", None) in bind_domains and not isIPv4(data.get("host")):
-            self.err("内部错误", "未绑定的域名，请在配置中添加。")
-            return
+        #if not data.get("host", None) in bind_domains and not isIPv4(data.get("host")):
+        #    self.err("内部错误", "未绑定的域名，请在配置中添加。")
+        #    return
 
         if data.get("content-type", None) == 'multipart/form-data':
             self.updata(data)
@@ -371,11 +371,11 @@ class ServerResponse:
         if not str(ty) in http_errorcodes:
             header.set(0, "HTTP/1.1 500 Service Error")
             self.conn.send(header.encode()+b'\r\n')
-            self.conn.send((ERRPage % ('500', ty, x)).encode())
+            self.conn.send((ERRPage().format('500', ty, x)).encode())
         else:
             header.set(0, "HTTP/1.1 %s %s"%(ty, http_errorcodes[str(ty)][0]))
             self.conn.send(header.encode()+b'\r\n')
-            self.conn.send((ERRPage % (ty, http_errorcodes[str(ty)][0], http_errorcodes[str(ty)][1])).encode())
+            self.conn.send((ERRPage().format(ty, http_errorcodes[str(ty)][0], http_errorcodes[str(ty)][1])).encode())
 
     @profile
     def include(self, path):
@@ -463,11 +463,10 @@ class File_C:
     def append(self, value):
         self.file[len(self.file)] = value
 
-a=Server(ip='IP')
-a.start()
+def test():
+    
+    a=Server(ip='localhost')
+    a.start()
 
-#OPEN WITH SSL
-b=Server(ip='IP', port=443)
-b.open_SSL()
-b.start()
-
+if __name__ == '__main__':
+    test()
