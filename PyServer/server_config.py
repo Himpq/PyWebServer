@@ -4,13 +4,14 @@ import time,os
 from threading import Thread
 from http_returntype import *
 
-if not os.path.isfile("./pws_config.ini"):
+#下面这段暂无鸟用，下一个版本更新配置文件
+'''if not os.path.isfile("./pws_config.ini"):
     with open("./pws_config.ini", 'w') as f:
         f.write("- PyWebServer Config\n")
         f.write("""
 ServerPath={0}
 InstallPath={1}
-ip=192.168.1.112
+ip=
 port=80
 ssl=false
 
@@ -40,6 +41,7 @@ safeguard='Server Safeuard','The server is being maintained.'
 
 
 """.format(os.path.abspath("./Website"), os.path.abspath("./")))
+'''
 
 #Status:
 SAFEGUARD = 0 #维护
