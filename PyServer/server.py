@@ -105,7 +105,7 @@ class Server:
             except:
                 continue
 
-    def _ke(self):
+    def _hb(self): #Heart beating
         while 1:
             Logger.info("Server alive.")
             time.sleep(10)
@@ -138,7 +138,7 @@ class ServerResponse:
         self.connfile = conn.makefile('rb')
         self.ip = ip
         self.cachesize = 4096
-        self.cache2 = File_B()
+        self.cache2 = FileCache()
 
         Logger.comp("响应IP: ", ip)
         self.runin = ''
@@ -146,24 +146,6 @@ class ServerResponse:
         self._FILE = {}
 
         self.status = 'in init func.'
-
-        '''try:
-            #self.response()
-            pass
-        except Exception as e:
-            Logger.warn(e)
-        finally:
-            try:
-                self.connfile.close()
-                self.conn.close()
-            except:
-                pass
-            try:
-                while 1:
-                    stop_thread(self.server.tpool[self.ident][0])
-            except:
-                pass
-        #stop_thread(server.tpool[ident+1])'''
 
     def response(self):
         time1 = time.time()
@@ -432,7 +414,7 @@ class Header:
             p+=i.encode()+b":"+self.headers[i].encode()
             p+=b'\r\n'
         return p
-class File_B:
+class FileCache:
     def __init__(self, trueFile=False):
         self.file = '' if not trueFile else None
     def write(self, data):
@@ -441,32 +423,10 @@ class File_B:
         pass
     def read(self):
         return self.file
-class File_C:
-    def __init__(self, trueFile=False):
-        #self.file = '' if not trueFile else None
-        self.file = {}
-    def write(self, key, data):
-        self.file[str(key)] = data
-    def get(self, key):
-        return self.file[key] if key in self.file else None
-    def save(self):
-        pass
-    def read(self):
-        txt = ''
-        for i in self.file:
-            if type(i) == int:
-                txt += self.file[i]+'\r\n'
-                continue
-            
-            txt += i+':'+self.file[i]+'\r\n'
-        return txt
-    def append(self, value):
-        self.file[len(self.file)] = value
 
 def test():
     
-    a=Server(ip='localhost')
+    a=Server(ip=ip)
     a.start()
 
-if __name__ == '__main__':
-    test()
+test()
