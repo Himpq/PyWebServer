@@ -3,14 +3,6 @@
 import os
 import random
 
-class Counter:
-    def __init__(self):
-        self.s = 0
-    def get(self):
-        return self.s
-    def next(self):
-        self.s+=1
-
 nx=0
 
 class cachefile:
@@ -82,49 +74,3 @@ class cachefile:
             self.file.seek(upseek)
         except:
             pass
-        
-        
-class CF:
-    def __init__(self, file, path):
-        self.file = file
-        self.path = path
-        self.seek = 0
-    def write(self, content):
-        self.file.write(content)
-    def read(self, ma=-1):
-        return self.file.read(ma)
-
-nums = 0
-count = Counter()
-
-def new(path='./temp'):
-    a = str(nums)
-    file = open(path+"/%s.tmp"%a, 'wb')
-    file.close()
-    file = open(path+"/%s.tmp"%a, 'wb+')
-    
-    return CF(file, path+"/%s.tmp"%a)
-
-def whilewith(func, file:CF, length=1024):
-    file.file.seek(0)
-    while 1:
-        r = file.read(length)
-        if r == b'':
-            return
-        func(r)
-
-def clean(file:CF):
-    file.file.close()
-    n = 0
-    '''while 1:
-        if n > 1000000:
-            print("无法清除缓存文件: %s"%file.path)
-            break
-        n += 1
-        try:
-            os.remove(file.path)
-        except PermissionError as e:
-            continue
-        else:
-            break'''
-    os.remove(file.path)
