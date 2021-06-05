@@ -30,16 +30,6 @@ def toInt(integer):
     except:
         return 0
 
-def savefile(file, search, save) -> None:
-    r = file.readline()
-    while 1:
-        #print(search, r)
-        if search in r:
-            break
-        save.write(r)
-        save.file.flush()
-        r = file.readline()
-    del r
 def updata_exp(connf, bd,l = 4096):
     az = {}
     arr = {}
@@ -49,10 +39,7 @@ def updata_exp(connf, bd,l = 4096):
         d = connf.readline()
         if d == b'':
             break
-
         caf.write(d)
-        
-
     connf.close()
     data = exp_updata(caf, bd)
     return data
@@ -132,172 +119,7 @@ def exp_updata(file, bd):
                 datas[header.get('content-disposition')['name']] = ctx.decode()
         else:
             pass
-    return files, datas
-            
-        
-'''def exp_updata1(file, bd):
-    file.save()
-    file.seek(0)
-
-    files = {}
-    datas = {}
-
-    if not file.read(len("--"+bd)) == b'--'+bd.encode():
-        return {}
-
-    stop = False
-    while not stop:
-        content = ''
-        filedata = {}
-        #while not content.endswith('\r\n\r\n'):
-        #    content += file.read(1).decode()
-        while not content.endswith("\r\n\r\n"):
-            content += file.readline().decode()
-
-        filedata = exp_http(content)
-        if 'content-disposition' in filedata:
-            cd = filedata['content-disposition']
-            if 'filename' in cd and 'name' in cd:
-                cf = cache.cachefile()
-                files[cd['name']] = {}
-                files[cd['name']]['cachefile'] = cf
-
-                #while not cf.endswith(b"--"+bd.encode()):
-                #    cf.write(file.read(1))
-                #cf.delete(len(b'--'+bd.encode())+4)
-                savefile(file, b'--'+bd.encode(), cf)
-                file.seek(-4, 1)
-                cf.seek(-2, 1)
-                if cf.read() == b'\r\n':
-                    cf.delete(2)
-                if file.read(2) == b'--':
-                    break
-                else:
-                    file.file.seek(-2, 1)
-            else:
-                x = ''
-                #while not x.endswith('--'+bd):
-                #    x += file.read(1).decode()
-                #datas[cd['name']] = x[0:len(x)-len('\r\n--'+bd)]
-                while 1:
-                    r = file.readline()
-                    if bd.encode() in r:
-                        break
-                    x += r.decode()
-                datas[cd['name']] = x
-                file.seek(-4, 1)
-
-                if x[-2:] == '\r\n':
-                    datas[cd['name']] = x[0:-2]
-                if file.read(2) == b'--':
-                    break
-                else:
-                    file.file.seek(-2, 1)
-        else:
-            break
-
-    return files, datas      
-
-@profile
-def exp_http(ctx):
-    ctx = ctx.split("\r\n")
-    x = {}
-    n = 0
-    for i in ctx:
-        if ":" in i:
-            kvs = i.split(":")
-            key, val = kvs[0].strip(), ':'.join(kvs[1:]).strip()
-            if ';' in val:
-                gval = val.split(";")
-                n2 = 0
-                arr = {}
-                for ix in gval:
-                    kvas = ix.split("=")
-                    if len(kvas) == 1:
-                        val2 = ix.strip()
-                        key2 = n2
-                        n2 += 1
-                    else:
-                        key2, val2 = kvas[0].strip(), "=".join(kvas[1:]).strip()
-                    arr[key2] = val2 if not val2[0] in ("'",'"') and not val2[-1] in ('"', "'") else val2[1:-1]
-                val = arr
-                x[key.lower()] = val
-            else:
-                x[key.lower()] = val
-        else:
-            x[n] = i.strip()
-            n += 1
-    return x
-    
-def updata_exp2(conn, bd):
-    zz = {}
-    arr = {}
-    content = ''
-    while not content.endswith('\r\n\r\n'):
-        x = conn.recv(1)
-        content += x.decode()
-
-    bd = '--'+bd
-    sp = content.replace(bd, '')
-    sp = content.split("\r\n")
-    for i in sp:
-        i = i.strip()
-        if i == '':
-            continue
-        if i[0:19].lower() == 'content-disposition':
-            val = i[19:].replace(":","",1).lstrip()
-
-            if ';' in val:
-                sp2 = val.split(";")
-
-                for ix in sp2:
-                    if "=" in ix:
-                        k = ix.split("=")
-                        ke, va = k[0].strip(), '='.join(k[1:]).strip()
-                        arr[ke]=va
-                    else:
-                        arr['content-disposition']=ix
-
-        elif i[0:12].lower() == 'content-type':
-            arr['type'] = i[12:].replace(":","",1).strip()
-
-    cafile = cache.cachefile()
-    while not cafile.endswith(bd.encode()):
-        cafile.write(conn.recv(1))
-    
-    cafile.delete(len(bd))
-    arr['file'] = cafile
-    zz[arr['name']] = arr
-    return zz
-    
-def updata_exp2(conn, boundary):
-    arr = {}
-    o = ''
-    while not o.endswith('\r\n\r\n'):
-        x =conn.recv(1)
-        #print(x, end='')
-        o += x.decode()
-
-    l = o.split(boundary)
-    for i in l:
-        if ':' in i:
-            ars = i.split(":")
-            ars[0] = ars[0].strip()
-            arr[ars[0]] = ':'.join(ars[1:]).strip()
-            if ';' in arr[ars[0]]:
-                ks = arr[ars[0]].split(";")
-                x = {}
-                n = 0
-                for i in ks:
-                    o = i.split("=")
-                    if len(o) == 1:
-                        x[n] = o
-                        n += 1
-                    else:
-                        o[0] = o[0].strip()
-                        x[o[0]] = '='.join(o[1:]).strip()
-                arr[ars[0]] = x
-    return arr'''
+    return files, datas            
 
 @profile
 def QZ(da):
