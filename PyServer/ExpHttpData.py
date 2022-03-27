@@ -5,18 +5,20 @@ from server_config import *
 from Logger import Logger
 from threading import Thread
 from functions import stop_thread
-from memory_profiler import *
-prof = profile
+#from memory_profiler import *
+#prof = profile
+import time
 
 def profile(func):
     def x(*arg, **args):
-        l = time.time()
+        #l = time.time()
         o = func(*arg, **args)
-        p = time.time()
-        #sys.stderr.write("===========\n函数"+func.__name__+" 耗时:"+str(p-l)+"\n==========\n")
+        #p = time.time()
+        #with open("logs/log.txt", 'a') as f:
+        #    f.write(time.ctime()+"-->:函数"+func.__name__+" 耗时:"+str(p-l)+";返回值:"+str(o)+"\n")
         return o
     return x
-
+prof = profile
 Logger = Logger()
 abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 ott = '1234567890'
@@ -30,12 +32,15 @@ def toInt(integer):
     except:
         return 0
 
-def updata_exp(connf, bd,l = 4096):
+@prof
+def updata_exp(connf, bd, conn):
     az = {}
     arr = {}
     caf = cache.cachefile()
 
     while not caf.endswith(b"--"+bd.encode()+b"--\r\n"):
+        if getattr(conn, "_closed"):
+            return ""
         d = connf.readline()
         if d == b'':
             break
@@ -44,7 +49,7 @@ def updata_exp(connf, bd,l = 4096):
     data = exp_updata(caf, bd)
     return data
 
-
+@prof
 def exp_updata(file, bd):
     file.save()
     file.seek(0)
@@ -174,13 +179,14 @@ def PX(da):
         leng -= 1
     return da
 
-@profile
-def exp(connf):
+@prof
+def exp(connf,conn):
         content = b''
         headers = {
             "getdata":{},
             "postdata":{},
             "rewritedata":{},
+            "headers": {},
             "path":"",
             "language":"",
             "cookie":{}
@@ -193,7 +199,15 @@ def exp(connf):
             nonlocal content, headers, a
             try:
                 while not content[-4:] == b'\r\n\r\n':
-                    ctx = a.readline()
+                    if getattr(conn, "_closed"):
+                        return ("", "") #Should be raise error
+                    try:
+                        ctx = a.readline()
+                    except:
+                        continue
+
+                    if ctx == b'\r\n' or ctx == b'':#无信息不调用
+                        break
                     
                     xx = exp_headers(ctx.decode())
                     if len(xx) == 3:
@@ -241,6 +255,8 @@ def decodePOST(line):
 
 @profile
 def decodeGET(line):
+    if not "?" in line:
+        return line, {}
     get = "?".join(line.split("?")[1:])
     path = line.split("?")[0]
     arr = {}
@@ -258,8 +274,10 @@ def decodeGET(line):
             arr[n] = uparse.unquote(i)
     return path, arr
             
-@profile
+@prof
 def exp_headers(i):
+    if i == '':
+        return ['', '']
     x = i.split(":")
     
     if i[0:3].upper() == 'GET' or i[0:4].upper() == 'POST':
