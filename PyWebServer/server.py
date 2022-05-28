@@ -26,10 +26,6 @@ import re
 #prof = profile
 Coll = Collection()
 
-if not os.path.isdir("./logs"):
-    os.mkdir("./logs")
-    open("logs/log.txt", 'w').close()
-
 def profile(func):
     def x(*arg, **args):
         l = time.time()
@@ -324,6 +320,8 @@ class ServerResponse:
 
                 datas = self.header.encode()+b'\r\n'
                 datas += (pythonPrintContent if not Mode304 else b"")+b'\r\n\r\n'
+
+                self.conn.sendall(datas)
         else:
             self.err("404")
 
