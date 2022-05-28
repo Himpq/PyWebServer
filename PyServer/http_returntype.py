@@ -13,6 +13,7 @@ return_filetype = {           #返回某文件后缀时的类型
     'image.tiff'              : ['tiff', 'tif'],
     'image.fax'               : ['fax'],
     'image.x-icon'            : ['ico', 'icon'],
+    'image/svg+xml'           : ['svg'],
 
     'java.*'                  : ['class', 'java'],
     
