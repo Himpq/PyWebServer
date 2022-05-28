@@ -51,3 +51,4 @@ return_filetype = {           #返回某文件后缀时的类型
     
     'default': 'text.plain'
 }
+
