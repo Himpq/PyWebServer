@@ -5,7 +5,7 @@ if os.path.isdir(",/temp"):
     os.mkdir("./temp")
 
 if not os.path.isfile("./pws_config.ini"):
-    with open("./pws_config.ini", 'w') as f:
+    with open("./pws_config.ini", 'w', encoding='utf-8') as f:
         f.write("; PyWebServer Config\n")
         f.write("""
 [setting]
