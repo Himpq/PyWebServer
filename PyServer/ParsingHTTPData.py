@@ -3,29 +3,35 @@ import CacheModule as cache
 
 from server_config import *
 from Logger import Logger
-from threading import Thread
-from functions import stop_thread
+#from threading import Thread
+#from functions import stop_thread
 #from memory_profiler import *
 #prof = profile
 import time
+import os
+import threading
+from functions import *
 
 def profile(func):
     def x(*arg, **args):
-        #l = time.time()
+        l = time.time()
         o = func(*arg, **args)
-        #p = time.time()
-        #with open("logs/log.txt", 'a') as f:
-        #    f.write(time.ctime()+"-->:函数"+func.__name__+" 耗时:"+str(p-l)+";返回值:"+str(o)+"\n")
+        p = time.time()
+        with open("logs/log.txt", 'a') as f:
+            f.write(time.ctime()+"-->:函数"+func.__name__+" 耗时:"+str(p-l)+";返回值:"+str(o)+"\n")
         return o
     return x
 prof = profile
+
+
 Logger = Logger()
 abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 ott = '1234567890'
 ope = '-=.'
-import os, mmap
+quot = (b'"', b"'", "'", '"')
 
 def toInt(integer):
+    "将Accept-Language中的q值转换为具体数字"
     try:
         integer = integer.replace("q=", '')
         return float(integer)
@@ -33,9 +39,10 @@ def toInt(integer):
         return 0
 
 @prof
-def updata_exp(connf, bd, conn):
-    az = {}
-    arr = {}
+def parsingUpdateFile(connf, bd, conn):
+    """该函数用于解析正在上传的文件(通过HTTPSOCKET连接)。
+    connf: Connecting socket(makefile); bd=boundary; conn: Connecting socket"""
+
     caf = cache.cachefile()
 
     while not caf.endswith(b"--"+bd.encode()+b"--\r\n"):
@@ -46,11 +53,14 @@ def updata_exp(connf, bd, conn):
             break
         caf.write(d)
     connf.close()
-    data = exp_updata(caf, bd)
+    data = parsingCacheFile(caf, bd)
     return data
 
 @prof
-def exp_updata(file, bd):
+def parsingCacheFile(file, bd):
+    """该函数用于解析已被储存到本地的用户上传文件。
+    file: Cache uploaded files; bd=boundary: HTTP Uploaded Boundary"""
+
     file.save()
     file.seek(0)
 
@@ -68,119 +78,70 @@ def exp_updata(file, bd):
 
             while 1:
                 ctx = file.readline().strip()
-                if ctx == b'\r\n' or ctx == b'': #无信息
+                if ctx == b'\r\n' or ctx == b'': #无信息/读取完毕自动停止解析
                     break
-                ctx = list(exp_headers(ctx.decode()))
-                ctx[0] = ctx[0].lower()
+
+                ctx            = list(parsingHeaderLine(ctx.decode()))
+                ctx[0]         = ctx[0].lower()
                 header[ctx[0]] = ctx[1]
+
                 if ctx[0].lower() == 'content-disposition':
-                    i = ctx[1].split(";")
-                    g = {}
-                    for x in i:
-                        if '=' in x:
-                            o = x.split("=")
-                            u = (b'"', b"'", "'", '"')
+                    #进行解析form-data表单中的 Content-Disposition 信息
+                    contDisposition = ctx[1].split(";")
+                    dispositionData = {}
+                    for value in contDisposition:
+                        if '=' in value:
+                            keyVal = value.split("=")
+                            if keyVal[1].strip()[0] in quot and keyVal[1].strip()[-1] in quot:
+                                keyVal[1] = keyVal[1].strip()[1:-1]
 
-                            if o[1].strip()[0] in u and o[1].strip()[-1] in u:
-                                o[1] = o[1].strip()[1:-1]
-
-                            g[o[0].strip()] = o[1]
+                            dispositionData[keyVal[0].strip()] = keyVal[1]
                         else:
-                            g['type'] = x
-                    header[ctx[0]] = g
+                            dispositionData['type'] = value
+                    header[ctx[0]] = dispositionData
 
             if header.get("content-type"):
                 cf = cache.cachefile()
-                files[header.get('content-disposition')['name']] = {'cachefile':cf,
-                                                                    'filename':header.get("content-disposition")['name']}
+                files[header.get('content-disposition')['name']] = {
+                                                                    'cachefile':cf,
+                                                                    'filename':header.get("content-disposition").get("name", "noNameFile")
+                                                                   }
 
+                #读取本地文件在 Boundary 之前的部分以此保存文件
                 while True:
-                    d = file.readline()
-                    if d[len(d)-len(bd)-2:] == bd+b'\r\n':
+                    line = file.readline()
+                    if line[len(line)-len(bd)-2:] == bd+b'\r\n':
                         file.seek(-len(bd)-2, 1)
                         break
-                    elif d[len(d)-len(bd)-4:] == bd+b'--\r\n':
+                    elif line[len(line)-len(bd)-4:] == bd+b'--\r\n':
                         file.seek(-len(bd)-4, 1)
                         stop = True
                         break
                     
-                    cf.write(d)
+                    cf.write(line)
             else:
                 ctx = b''
                 while 1:
-                    dx = file.readline()
-                    d = dx
-                    if d[len(d)-len(bd)-2:] == bd+b'\r\n':
+                    #读取本地文件在 Boundary 之前的部分以此解析表单内容
+                    line = file.readline()
+
+                    if line[len(line)-len(bd)-2:] == bd+b'\r\n':
                         file.seek(-len(bd)-2, 1)
                         break
-                    elif d[len(d)-len(bd)-4:] == bd+b'--\r\n':
+                    elif line[len(line)-len(bd)-4:] == bd+b'--\r\n':
                         file.seek(-len(bd)-4, 1)
                         stop = True
                         break
-                    elif dx == b'':
+                    elif line == b'':
                         break
-                    ctx += d
+                    ctx += line
                     
                 datas[header.get('content-disposition')['name']] = ctx.decode()
-        else:
-            pass
-    return files, datas            
 
-@profile
-def QZ(da):
-    arr = []
-    z = ['']
-
-    n = 0
-    while len(da) > n:
-        v = da[n]
-        if v in abc or v in ott or v in ope:
-            z[-1] += v
-        if v == ';' or v == ',' or v == ':':
-            z.append('')
-        n += 1
-    return z
-
-@profile
-def FZ(da):
-    da = da[1:]
-    lang = []
-    for i in da:
-        if 'q=' in i:
-            g = lang.copy()[::-1]
-            f = []
-
-            n = -1
-            for i2 in g:
-                n += 1
-                if not type(i2) == list:
-                    f.append(i2)
-                else:
-                    break
-            f.append(toInt(i.replace('q=','')))
-            if len(f) < 3:
-                f.insert(1, '')
-            lang.append(f)
-        else:
-            lang.append(i)
-    p = []
-    for i in lang:
-        if type(i) == list:
-            p.append(i)
-    return p
-
-@profile
-def PX(da):
-    leng = len(da)
-    while leng > 0:
-        for i in range(leng - 1):
-            if da[i][2] < da[i+1][2]:
-                da[i], da[i+1] = da[i+1], da[i]
-        leng -= 1
-    return da
+    return files, datas
 
 @prof
-def exp(connf,conn):
+def parsingHeader(connf,conn):
         content = b''
         headers = {
             "getdata":{},
@@ -192,55 +153,64 @@ def exp(connf,conn):
             "cookie":{}
         }
 
-        a = connf 
-
         @profile
-        def xs():
-            nonlocal content, headers, a
+        def getContent():
+            #获取HTTP头原始数据
+            nonlocal content, headers, connf
             try:
                 while not content[-4:] == b'\r\n\r\n':
                     if getattr(conn, "_closed"):
-                        return ("", "") #Should be raise error
+                        return ("", "")               #此时socket被关闭，正常来算应该报个错
                     try:
-                        ctx = a.readline()
+                        ctx = connf.readline()
                     except:
                         continue
 
-                    if ctx == b'\r\n' or ctx == b'':#无信息不调用
+                    if ctx == b'\r\n' or ctx == b'':  #无信息退出，以免导致高cpu占用(长连接)
                         break
                     
-                    xx = exp_headers(ctx.decode())
-                    if len(xx) == 3:
-                        headers[xx[0][0]] = xx[0][1]
-                        headers[xx[1][0]] = xx[1][1]
+                    parsedLine = parsingHeaderLine(ctx.decode())
+                    
+                    if len(parsedLine) == 3:
+                        headers[parsedLine[0][0]] = parsedLine[0][1]
+                        headers[parsedLine[1][0]] = parsedLine[1][1]
                     else:
-                        headers[xx[0]] = xx[1]
-                    if xx == b'':
+                        headers[parsedLine[0]] = parsedLine[1]
+                    if parsedLine == b'':
                         break
 
                     content += ctx
             except Exception as e:
-                print("An error in exp http data:",e)
+                print("Error in parsing header:", e)
                 content = b''
             
-                
-        xs()
+        #防止读取HTTP请求头超时
+        getctxThread = threading.Thread(target=getContent)
+        getctxThread.start()
+        getctxThread.join(config['timeout'])
+        if getctxThread.is_alive():
+            stop_thread(getctxThread)
+            return content, headers
+
 
         if headers.get("content-type", "") == 'application/x-www-form-urlencoded':
             if headers.get("method", "") == "POST":
                 if headers.get("content-length", ""):
+                    #读取POST信息，目前没有做内存溢出的保护
                     length = headers.get("content-length")
 
-                    headers['postdata'] = decodePOST(a.read(length).decode())
+                    headers['postdata'] = decodePOST(connf.read(length).decode())
                 else:
-                    headers['postdata'] = decodePOST(a.readline().decode())
+                    headers['postdata'] = decodePOST(connf.readline().decode())
         
         if headers.get("path",""):
+            #解析GET数据并存储于getdata中
             headers['path'], headers['getdata'] = decodeGET(headers.get("path"))
         return content, headers
 
 @profile
 def decodePOST(line):
+    "解析POST数据"
     if line.strip() == '':
         return {}
     arr = {}
@@ -255,6 +225,7 @@ def decodePOST(line):
 
 @profile
 def decodeGET(line):
+    "解析GET数据"
     if not "?" in line:
         return line, {}
     get = "?".join(line.split("?")[1:])
@@ -275,7 +246,8 @@ def decodeGET(line):
     return path, arr
             
 @prof
-def exp_headers(i):
+def parsingHeaderLine(i):
+    "用于解析一行HTTP Header。 i: string(http header)"
     if i == '':
         return ['', '']
     x = i.split(":")
@@ -288,7 +260,7 @@ def exp_headers(i):
 
     elif i[0:9].upper() == 'USER-AGENT':
         agent = ':'.join(i.split(':')[1:]).strip()
-        return ['user_agent', agent]
+        return ['user-agent', agent]
     elif i[0:5].upper() == 'RANGE':
         rangeee = ':'.join(i.split(':')[1:]).strip()
         return ['range', rangeee]
@@ -313,7 +285,7 @@ def exp_headers(i):
         for i in cookies:
                 if '=' in i:
                     g = i.split("=")
-                    key = g[0]
+                    key = g[0].strip()
                     val = '='.join(g[1:])
                     kv[key] = val
         return ['cookie', kv]
@@ -325,6 +297,6 @@ def exp_headers(i):
         return 'content-type', val.strip()
     else:
         if ":" in i:
-            return [i.split(":")[0].strip(),':'.join(i.split(":")[1:]).strip()]
+            return [i.split(":")[0].strip().lower(),':'.join(i.split(":")[1:]).strip()]
         else:
             return ['', '']
