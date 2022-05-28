@@ -26,6 +26,10 @@ import re
 #prof = profile
 Coll = Collection()
 
+if not os.path.isdir("./logs"):
+    os.mkdir("./logs")
+    open("logs/log.txt", 'w').close()
+
 def profile(func):
     def x(*arg, **args):
         l = time.time()
