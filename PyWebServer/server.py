@@ -312,8 +312,8 @@ class ServerResponse:
                 pythonPrintContent = self.cache2.read().encode()
                 
                 #ETag 缓存
+                Mode304 = False
                 if self.ETagMode:
-                    Mode304 = False
                     ETag    = getHash(pythonPrintContent)
                     ClientETag = data.get('if-none-match')
                     if ClientETag and ClientETag == ETag:
@@ -322,10 +322,8 @@ class ServerResponse:
                     else:
                         self.header.set("ETag", ETag)
 
-                    datas = self.header.encode()+b'\r\n'
-                    datas += (pythonPrintContent if not Mode304 else b"")+b'\r\n\r\n'
-
-                    self.conn.sendall(datas)
+                datas = self.header.encode()+b'\r\n'
+                datas += (pythonPrintContent if not Mode304 else b"")+b'\r\n\r\n'
         else:
             self.err("404")
 
