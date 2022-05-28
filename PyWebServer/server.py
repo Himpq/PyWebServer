@@ -137,7 +137,7 @@ class ServerResponse:
         self.ip = ip
         self.cachesize = 4096
         self.cache2 = FileCache()
-        self.ETagMode = False
+        self.ETagMode = True
 
         Logger.comp("响应IP: ", ip)
         self.runin = ''
