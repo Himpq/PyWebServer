@@ -1,4 +1,32 @@
 import inspect, ctypes
+from io import *
+import gzip
+import hashlib
+
+HashCacheSize = 4096
+
+#Gzip 压缩函数
+def gzip_encode(data):
+    buf = BytesIO()
+    f = gzip.GzipFile(mode='wb', fileobj=buf)
+    f.write(data)
+    f.close()
+    buf.seek(0)
+    return buf.read()
+
+#Hash(md5) 函数
+def getHash(content):
+    sha1obj = hashlib.sha1()
+    sha1obj.update(content)
+    return sha1obj.hexdigest()
+def getHashByFile(file):
+    sha1obj = hashlib.sha1()
+    content = file.read(HashCacheSize)
+    while not content == b'':
+        sha1obj.update(content)
+        content = file.read(HashCacheSize)
+    file.close()
+    return sha1obj.hexdigest()
 
 #停止线程函数
 def _async_raise(tid, exctype):
@@ -55,7 +83,7 @@ def iniToJson(inipath):
     import configparser as cp
     cf = cp.ConfigParser()
     cf.optionxform = lambda option: option
-    cf.read(inipath)
+    cf.readfp(open(inipath, encoding='utf-8'))
     jsons1 = {}
     result = {}
     kv = {}
@@ -65,6 +93,7 @@ def iniToJson(inipath):
     for i in kv.keys():
         result[i] = {}
         for v in kv[i]:
+            v = list(v)
             vf = v[1].strip()
             if vf == '':
                 vf = None
@@ -77,15 +106,24 @@ def iniToJson(inipath):
             elif vf[0] == '(' and vf[-1] == ')':
                 try:
                     vf = eval(vf)
-                except:
-                    pass
+                except Exception as e:
+                    print("[ Value:", vf," ] Occurs when parsing:", e)
+
+            if v[0][0] == '(' and v[0][-1] == ')':
+                try:
+                    v[0] = eval(v[0])
+                except Exception as e:
+                    print("[ Key:", v[0], "] Occurs when parsing:", e)
+
             result[i][v[0]] = vf
             
     return result
+
 #洁净输出json
 def prettyPrint(j):
     import json
     print(json.dumps(j, sort_keys=True, indent=4, separators=(',', ':')))
+
 #是否是一个ipv4地址
 def isIPv4(domain):
     if len(domain.split(".")) == 4:
