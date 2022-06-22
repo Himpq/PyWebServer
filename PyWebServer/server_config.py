@@ -5,7 +5,7 @@ if os.path.isdir(",/temp"):
     os.mkdir("./temp")
 
 if not os.path.isfile("./pws_config.ini"):
-    with open("./pws_config.ini", 'w', encoding='utf-8') as f:
+    with open("./pws_config.ini", 'w') as f:
         f.write("; PyWebServer Config\n")
         f.write("""
 [setting]
@@ -28,7 +28,7 @@ clean-threadtime=10
 server_status=NORMAL
 errorpagePath=./ErrorPages/error.html
 sslpath=('cert.crt','key.key','ca.crt')
-
+use-multiprocessing=true
 maxsize-for-etag = (1024*1024*100)
 
 [black_list]
@@ -72,8 +72,8 @@ bind_domains = [] #绑定的域名
 
 
 ERRPagePath = "./ErrorPages/error.html"
-ERRPage = lambda:open(ERRPagePath,'r').read()
-
+ERRPageStr = open(ERRPagePath,'r').read()
+ERRPage = lambda:ERRPageStr
 def __printContent():
     import json
     print(json.dumps(opts, sort_keys=True, indent=4, separators=(',', ':')))
