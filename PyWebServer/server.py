@@ -4,9 +4,8 @@
     By Himpq| Created in 2020-10-12
 """
 
-from threading import Thread
 from Logger import Logger
-from server_config import ServerPath, ip, port  #为了不再让Vscode这个沙雕报错
+from server_config import ServerPath, ip, port
 from server_config import *
 from ParsingHTTPData import *
 from functions import *
@@ -18,37 +17,29 @@ import os
 import re
 import ssl
 import re
-#from memory_profiler import profile
-#import CacheModule as TM
-#import urllib.parse as uparse
-#from this import s
+#sys.setrecursionlimit(3000)
 
-#prof = profile
+import mpthread as mpt
+
 Coll = Collection()
 
 if not os.path.isdir("logs"):
     os.mkdir("logs")
     open("logs/log.txt", 'w').close()
 
-def profile(func):
-    def x(*arg, **args):
-        l = time.time()
-        o = func(*arg, **args)
-        p = time.time()
-        with open("logs/log.txt", 'a') as f:
-            f.write(time.ctime()+"-->:函数"+func.__name__+" 耗时:"+str(p-l)+";返回值:"+str(o)+"\n")
-        return o
-    return x
-prof = profile
-
 ssl._create_default_https_context = ssl._create_unverified_context
 
 SERVER = "PWS"
-VERSION = "/4.2"
+VERSION = "/4.7"
+
+def startThreadByMPT(thr):
+    if not config['use-multiprocessing']:
+        thr.start()
+    else:
+        mpt.Threadings.append(thr)
 
 #服务器
 class Server:
-    @profile
     def __init__(self, ip='localhost', port=80, maxlisten=128):
         self.is_start = False
         self.ip = ip
@@ -65,78 +56,70 @@ class Server:
         #self.ssl_context.load_verify_locations(sslpath[2])
         #self.ssl_context.verify_mode = ssl.CERT_REQUIRED
         
-    def __setattr__(self, key, val):
+    '''def __setattr__(self, key, val):
         if 'is_start' in self.__dict__ and self.is_start:
             raise KeyError("Cannot change any arguments when server is running.")
-        self.__dict__[key] = val
+        self.__dict__[key] = val'''
 
     def _accept(self):
         ident = 0
-        while 1:
+        while self.is_start:
             try:
                 conn, addr = self.socket.accept()
+
                 if self.ssl:
                     conn = self.ssl_context.wrap_socket(conn, server_side=True)
-                se = ServerResponse
-                arg = se(conn, addr, ident, self)
-                user = Thread(target=arg.response)
-                user.start()
-                print("Recv from",addr)
-                self.tpool[ident] = [user, se]
+
+                obj  = ServerResponse(addr, ident)
+                user = mpt.Thread(target=obj.response, args=(conn, self.coll))
+                startThreadByMPT(user)
+                Logger.info("接收来自", addr, "的请求 | ID:", ident)
+                #print("Recv from",addr, "| Ident:", ident)
+                #self.tpool[ident] = [user, obj]
                 ident += 1
+            except KeyboardInterrupt as e:
+                print("Exit by keyboard.")
+                return
+            except SystemError as e:
+                print("Exit by system error.", e)
+                return
+            except OSError as e:
+                print("[Server] Exit by >>", e)
+                return
             except Exception as e:
-                print(e)
+                import traceback
+                e2 = traceback.format_exc()
+                print(e, e2)
                 continue
-
-            #time.sleep(0.01)
-
-    def _res(self):
-        while 1:
-            time.sleep(30)
-            try:
-                for i in list(self.tpool.keys()):
-                    if self.tpool[i][0].is_alive():
-                        continue
-                    #self.tpool.pop(i)
-                    del self.tpool[i]
-            except:
-                continue
-
-    def _hb(self): #Heart beating
-        while 1:
-            Logger.info("Server alive.")
-            time.sleep(10)
 
     def start(self):
+        Logger.comp("服务器启动。")
+        Logger.info("Listening: %s:%s"%(self.ip, self.port))
+        self.is_start = True
+
+        self.coll = mpt.MNG.dict({}) if config['use-multiprocessing'] else Coll#进程间使用Manager.dict以代替Collection
+
         self.socket = socket.socket()
         self.socket.bind((self.ip, self.port))
         self.socket.listen(self.maxlisten)
         
-        self.accept_thread = Thread(target=self._accept)
+        self.accept_thread = mpt.Thread(target=self._accept)
+        self.accept_thread.setDaemon(True)
         self.accept_thread.start()
-        self.clear_thread = Thread(target=self._res)
-        self.clear_thread.start()
-        #self.keep_alive = Thread(target=self._ke)
-        #self.keep_alive.start()
-        Logger.comp("Server startup complete.")
-        Logger.info("Listening: %s:%s"%(self.ip, self.port))
-        self.is_start = True
 
     def stop(self):
-        stop_thread(self.accept_thread)
-        stop_thread(self.clear_thread)
+        self.is_start = False
         self.socket.close()
 
 class ServerResponse:
-    def __init__(self, conn, ip, ident, server):
+    def __init__(self, ip, ident, server=None):
         
-        self.server = server
-        self.ident = ident
-        self.conn = conn
-        self.connfile = conn.makefile('rb')
+        #self.server = server
+        self.ident = ident  #没啥用
+        
         self.ip = ip
         self.cachesize = 4096
-        self.cache2 = FileCache()
+        
         self.ETagMode = True
 
         Logger.comp("响应IP: ", ip)
@@ -147,27 +130,33 @@ class ServerResponse:
 
         self.status = 'in init func.'
 
-    @prof
-    def response(self):
+    def response(self, conn, coll=None):
+        self.collection = coll
+        self.conn = conn
+        self.connfile = conn.makefile('rb')
+        self.cache2 = FileCache()
+
         time1 = time.time()
         self.status = 'in response func.'
         self.data   = '' #处理数据(处理后的list(即py文件中的_DATA))
         self.ysdata = '' #原始数据(未经处理的请求头)(bytes->string)
         def getx():
             self.ysdata , self.data = parsingHeader(self.connfile, self.conn)
-        self.getdatathread = Thread(target=getx)
+            
+        self.getdatathread = mpt.Thread(target=getx)
         self.getdatathread.start()
 
         #判断连接是否超时，超时就炸了它（15s)
         self.getdatathread.join(config['timeout'])
         if self.ysdata == '' or self.data == '' or self.getdatathread.is_alive():
-            stop_thread(self.getdatathread)
+            try:
+                stop_thread(self.getdatathread)
+            except:
+                pass
             print("Time out.")
             self.conn.close()
             self.connfile.close()
             return 0
-
-        
 
         if self.data.get("host") == None or self.data.get("path") == None:
             return
@@ -177,7 +166,7 @@ class ServerResponse:
         #if not self.data.get("host", None) in bind_domains and not isIPv4(self.data.get("host")):
         #    self.err("内部错误", "未绑定的域名，请在配置中添加。")
         #    return
-
+        #print(self.data)
         #判断是否是表单信息
         if self.data.get("content-type", None) == 'multipart/form-data':
             self.uploadFile(self.data)
@@ -242,7 +231,7 @@ class ServerResponse:
         globals_var['this']             = self
         globals_var['_FILE']            = {}
         globals_var["_DATA"]            = {}
-        globals_var["_COLL"]            = Coll
+        globals_var["_COLL"]            = self.collection
 
         return globals_var
 
@@ -262,7 +251,7 @@ class ServerResponse:
             self.PythonFileHandle(data, {"_FILE":x[0], "_DATA":x[1]})
         return
 
-    @prof
+    @profile
     def PythonFileHandle(self, data, glo={}):
         self.status = 'in PythonFileHandle func.'
 
@@ -329,7 +318,7 @@ class ServerResponse:
         else:
             self.err("404")
 
-    @prof
+    @profile
     def CommonFileHandle(self, data):
         self.status = 'in CommonFileHandle func.'
 
@@ -343,6 +332,8 @@ class ServerResponse:
             size = tsize                       #断点续传需要返回的大小（初始值为文件总大小）
             header = Header()
 
+            #print(data)
+
             if 'range' in data: 
                 #断点续传功能
                 ranges = getRange(data['range'].split("=")[1].strip())
@@ -352,7 +343,7 @@ class ServerResponse:
                 header.set(0, "HTTP/1.1 206 Partial Content")
                     
             header.set("Content-Type", FileType(data['path']))
-            header.set("Content-Length", "%s"%(size if not 'range' in data else (ranges[1] if not ranges[1] == '' else tsize)-ranges[0]))
+            header.set("Content-Length", "%s"%(size if not 'range' in data else (ranges[1]+1 if not ranges[1] == '' else tsize)-ranges[0]))
 
             #用户自定义头信息
             headersetting = opts.get("headers")
@@ -365,17 +356,24 @@ class ServerResponse:
 
             with open(realpath, 'rb') as f:
                 if 'range' in data:
-                    #断点续传没必要搞 ETag 缓存
+                    #断点续传
                     h = header.encode()+b'\r\n'
                     self.conn.send(h)
 
                     f.seek(ranges[0])
-                    nr = (ranges[1] if not ranges[1] == '' else tsize) + 1 #需要从 ranges[0] 读取到的部分
-                    count = (nr-ranges[0]) // 4096
-                    end = nr-ranges[0]-count*4096
-                    for i in range(count+1):
+
+                    CacheSize = config['cachesize']
+
+                    readTotalSize = ((ranges[1] + 1) if not ranges[1] == '' else tsize) - ranges[0] #需要从 ranges[0] 读取到的部分
+                    numOfRead     = (readTotalSize // CacheSize) if readTotalSize-ranges[0] > CacheSize else 1
+                    end           = (readTotalSize - numOfRead*CacheSize) if readTotalSize-ranges[0] > CacheSize else 0
+
+                    if readTotalSize < CacheSize:
+                        CacheSize = readTotalSize
+
+                    for i in range(numOfRead+1):
                         try:
-                            d = f.read(4096 if not i == count else end)
+                            d = f.read(CacheSize if not i == numOfRead else end)
                             self.conn.send(d)
                         except:
                             if getattr(self.conn, '_closed'):
@@ -409,7 +407,7 @@ class ServerResponse:
                     self.conn.send(b'\r\n')
 
                 except Exception as e:
-                    print(e)
+                    Logger.error("[CommonFileHandle] >> ", e)
                     
                     
         else:
@@ -496,7 +494,7 @@ class Header:
         self.headers = {}
         self.headers[0] = "HTTP/1.1 200 OK!"
         self.headers["Accept-Ranges"] = "bytes"
-        self.headers["Connection"] = '"close"'
+        self.headers["Connection"] = 'close'
         self.headers["Content-Encoding"] = "identity"
         self.headers["Date"] = time.asctime()
         self.headers["Server"] = SERVER+VERSION
@@ -537,4 +535,11 @@ def test():
     a=Server(ip=ip, port=port)
     a.start()
 
-test()
+if __name__ == '__main__':
+    mpt.start() if config['use-multiprocessing'] else None
+
+    test()
+    Logger.warn("[Server] MainPID:", os.getpid())
+
+    #防止不开启多进程导致主进程马上就屎了（因为线程使用守护线程）
+    a.accept_thread.join() if not config['use-multiprocessing'] else None  
