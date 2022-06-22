@@ -33,11 +33,6 @@ def Worker(IDENT, threads, isStarted, isStop):
     return 'Process %s had been stop.' % IDENT
 
 
-def __TEST(ID):
-        with open("D:/111_我的文件/xxx%s.txt"%ID, 'w') as f:
-            f.write(str(fib(ID*5)))
-        print(ID, '卧槽了')
-        return True
 
 isStarted = None
 Threadings = None
