@@ -5,7 +5,6 @@
 """
 
 from Logger import Logger
-from server_config import ServerPath, ip, port
 from server_config import *
 from ParsingHTTPData import *
 from functions import *
@@ -17,9 +16,9 @@ import os
 import re
 import ssl
 import re
-#sys.setrecursionlimit(3000)
 
-import mpthread as mpt
+
+from threading import Thread
 
 Coll = Collection()
 
@@ -31,13 +30,6 @@ ssl._create_default_https_context = ssl._create_unverified_context
 
 SERVER = "PWS"
 VERSION = "/4.7"
-
-def startThreadByMPT(thr):
-    if not config['use-multiprocessing']:
-        thr.start()
-    else:
-        mpt.Threadings.append(thr)
-
 #服务器
 class Server:
     def __init__(self, ip='localhost', port=80, maxlisten=128):
@@ -71,8 +63,8 @@ class Server:
                     conn = self.ssl_context.wrap_socket(conn, server_side=True)
 
                 obj  = ServerResponse(addr, ident)
-                user = mpt.Thread(target=obj.response, args=(conn, self.coll))
-                startThreadByMPT(user)
+                user = Thread(target=obj.response, args=(conn, self.coll))
+                user.start()
                 Logger.info("接收来自", addr, "的请求 | ID:", ident)
                 #print("Recv from",addr, "| Ident:", ident)
                 #self.tpool[ident] = [user, obj]
@@ -97,13 +89,14 @@ class Server:
         Logger.info("Listening: %s:%s"%(self.ip, self.port))
         self.is_start = True
 
-        self.coll = mpt.MNG.dict({}) if config['use-multiprocessing'] else Coll#进程间使用Manager.dict以代替Collection
+        #self.coll = mpt.MNG.dict({}) if config['use-multiprocessing'] else Coll#进程间使用Manager.dict以代替Collection
+        self.coll = Coll
 
         self.socket = socket.socket()
         self.socket.bind((self.ip, self.port))
         self.socket.listen(self.maxlisten)
         
-        self.accept_thread = mpt.Thread(target=self._accept)
+        self.accept_thread = Thread(target=self._accept)
         self.accept_thread.setDaemon(True)
         self.accept_thread.start()
 
@@ -143,7 +136,7 @@ class ServerResponse:
         def getx():
             self.ysdata , self.data = parsingHeader(self.connfile, self.conn)
             
-        self.getdatathread = mpt.Thread(target=getx)
+        self.getdatathread = Thread(target=getx)
         self.getdatathread.start()
 
         #判断连接是否超时，超时就炸了它（15s)
@@ -536,10 +529,10 @@ def test():
     a.start()
 
 if __name__ == '__main__':
-    mpt.start() if config['use-multiprocessing'] else None
+    #mpt.start() if config['use-multiprocessing'] else None
 
     test()
     Logger.warn("[Server] MainPID:", os.getpid())
 
     #防止不开启多进程导致主进程马上就屎了（因为线程使用守护线程）
-    a.accept_thread.join() if not config['use-multiprocessing'] else None  
+    a.accept_thread.join()
