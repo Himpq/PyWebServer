@@ -5,7 +5,7 @@ if os.path.isdir(",/temp"):
     os.mkdir("./temp")
 
 if not os.path.isfile("./pws_config.ini"):
-    with open("./pws_config.ini", 'w') as f:
+    with open("./pws_config.ini", 'w', encoding='utf-8') as f:
         f.write("; PyWebServer Config\n")
         f.write("""
 [setting]
@@ -24,11 +24,9 @@ raise-error=true
 timeout=5
 cachesize=409600
 sameip-request-count=5
-clean-threadtime=10
 server_status=NORMAL
 errorpagePath=./ErrorPages/error.html
 sslpath=('cert.crt','key.key','ca.crt')
-use-multiprocessing=true
 maxsize-for-etag = (1024*1024*100)
 
 [black_list]
