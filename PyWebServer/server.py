@@ -358,8 +358,8 @@ class ServerResponse:
                     CacheSize = config['cachesize']
 
                     readTotalSize = ((ranges[1] + 1) if not ranges[1] == '' else tsize) - ranges[0] #需要从 ranges[0] 读取到的部分
-                    numOfRead     = (readTotalSize // CacheSize) if readTotalSize-ranges[0] > CacheSize else 1
-                    end           = (readTotalSize - numOfRead*CacheSize) if readTotalSize-ranges[0] > CacheSize else 0
+                    numOfRead     = (readTotalSize // CacheSize) if readTotalSize > CacheSize else 1
+                    end           = (readTotalSize - numOfRead*CacheSize) if readTotalSize > CacheSize else 0
 
                     if readTotalSize < CacheSize:
                         CacheSize = readTotalSize
