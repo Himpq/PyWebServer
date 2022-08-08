@@ -25,7 +25,7 @@ def toObject(dic):
 #日志函数
 def profile(func):
     def x(*arg, **args):
-        PluginManager.FindWay(func.__name__, arg, args)
+        #PluginManager.FindWay(func.__name__, arg, args)
 
         if not func.__name__ in NOT_RECORDED_FUNCTIONS and LOG:
             l = time.time()
