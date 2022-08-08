@@ -27,7 +27,7 @@ python server.py
 * 绑定域名功能已被注释掉
 * 黑名单IP还未实现  
 ### HTTP2
-目前已初步支持（非常的初步）HTTP2协议，需要在配置文件中的```support-protocols```项更改信息```(["spdy/3.1", "h2", "http/1.1"])```。  
+目前已初步支持（非常的初步）HTTP2协议，需要在配置文件中的```support-protocols```项更改信息```(["spdy/3.1", "h2", "http/1.1"])```，并且开启HTTP2需要HTTPS证书。  
   
 当前的HTTP2不支持文件上传，不支持 POST，但是能正常的返回页面信息（包括Python）  
   
