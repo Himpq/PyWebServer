@@ -5,7 +5,10 @@
 [官网以及教程](http://pws.himpqblog.cn) 
 
 ## 安装和使用
-打包下载源码（如果你有本地Python环境，下载直接运行源码即可）  
+打包下载源码，安装hpack模块
+```
+pip install hpack
+```
 
 启动服务器：  
 ```
