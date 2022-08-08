@@ -20,10 +20,10 @@ import ssl
 import re
 import traceback
 import H2Response as h2r
-import pluginManager as pm
+#import pluginManager as pm
 
-ParsingHTTPData_SetPluginManager(pm)
-Functions_SetPluginManager(pm)
+#ParsingHTTPData_SetPluginManager(pm)
+#Functions_SetPluginManager(pm)
 
 sys.path.append("./Plugins")
 
