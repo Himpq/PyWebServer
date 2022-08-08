@@ -31,16 +31,6 @@ def JudgeH2(Conn):
             return True
         return False
 
-def random(t):
-    import random as rd
-    c = ["火殺", "雷杀", "闪", "南蛮入侵", "万箭齐发", "过河拆桥", "顺手牵羊", "闪电", "无中生有", "无懈可击", "乐不思蜀", "兵粮寸断", "青釭剑", "青龙偃月刀", "雌雄双股剑", "寒冰刃", "贯石斧", "诸葛连弩", "藤甲", "八卦阵", "仁王盾", "骅骝"]
-    s = ['黑桃 ♠', '红桃 ♥', '方块 ♦', '梅花 ♣']
-    x1 = rd.randint(0, len(c)-1)
-    x2 = rd.randint(0, 3)
-    #print(x1, x2)
-    return c[x1] +"   " + s[x2] + ("失败  ×" if not t else "成功  √")
-
-
 MagicContent = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 FrameTypes   = {
     '0' : 'Data',
