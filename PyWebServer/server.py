@@ -20,17 +20,17 @@ import ssl
 import re
 import traceback
 import H2Response as h2r
-#import pluginManager as pm
+import pluginManager as pm
 
-#ParsingHTTPData_SetPluginManager(pm)
-#Functions_SetPluginManager(pm)
+ParsingHTTPData_SetPluginManager(pm)
+Functions_SetPluginManager(pm)
 
 sys.path.append("./Plugins")
 
 #sys.setrecursionlimit(3000)
 
-from threading import Thread
-
+from threading import Thread, Lock
+ThreadLock = Lock()
 Coll = Collection()
 
 if not os.path.isdir("logs"):
@@ -42,6 +42,7 @@ ssl._create_default_https_context = ssl._create_unverified_context
 SERVER = "PWS"
 VERSION = "/4.9"
 #服务器
+
 class Server:
     def __init__(self, ip='localhost', port=80, maxlisten=128):
         self.is_start = False
@@ -76,20 +77,20 @@ class Server:
                     try:
                         useHTTPS = True
                         sslconn = self.ssl_context.wrap_socket(conn, server_side=True, do_handshake_on_connect=config['ssl-doshakehand'])
-
                     except ssl.SSLError as e:
                         if "CERTIFICATE_UNKNOWN" in str(e):
                             Logger.warn("证书存在问题：", str(e))
                         elif "http request" in str(e):
                             Logger.warn("客户端正在请求 HTTP。")
                             useHTTPS = False
+                            #conn.send(b'HTTP/1.1 302 Do this!\r\nlocation:https://'+self.ip.encode()+b":"+str(self.port).encode()+b'\r\n\r\n')
+                            #conn.close()
                         else:
                             Logger.error("证书存在严重问题：", e)
                             return
                     else:
                         if useHTTPS:
                             conn = sslconn
-
                 obj  = ServerResponse(addr, ident)
                 user = Thread(target=obj.response, args=(conn, self.coll))
                 user.start()
@@ -148,32 +149,40 @@ class ServerResponse:
         self.status = 'in init func.'
         self.inHTTP2 = False
         self.http2Res = None
-    
-    def clearEnvironment(self, conn, coll):
-        self.collection = coll
-        self.conn = conn
-        self.connfile = conn.makefile('rb')
-        self.cache2 = FileCache()
-        self.header = Header()
         self.finish = False
-        self.LineFeed = b''
-        self.SingleLineFeed = b'\r\n'
-        self.PythonFileCloseConnect = False
+        self.enableGzip = False
+    
+    def clearEnvironment(self, conn, coll, isSelf=False):
+        if isSelf:
+            newObj = self
+            newObj.conn = conn #
+            newObj.connfile = conn.makefile('rb') #
+        else:
+            newObj = ServerResponse(self.ip, self.ident)
+        newObj.collection = coll
+        #newObj.conn = conn
+        #newObj.connfile = conn.makefile('rb')
+        newObj.cache2 = FileCache()
+        newObj.header = Header()
+        newObj.finish = False
+        newObj.LineFeed = b''
+        newObj.SingleLineFeed = b'\r\n'
+        newObj.PythonFileCloseConnect = False
+        return newObj
 
     def response(self, conn, coll, already_keep_alive=0):
-        self.clearEnvironment(conn, coll)
+        self.clearEnvironment(conn, coll, True)
 
         Logger.comp("[长连接] 响应:", self.ip) if already_keep_alive else Logger.comp("响应IP: ", self.ip)
 
+        #判断是否是 HTTP2 连接，如果是就交由H2R模块进行处理
         if h2r.JudgeH2(self.conn):
             Logger.info(self.conn.selected_alpn_protocol())
             h2r.ServerResponseHTTP2(self, self.ident).response()
             self.inHTTP2 = True
             return
-            #Logger.info("判定结果：", h2r.random(1))
-        else:
-            Logger.info(self.conn.selected_alpn_protocol())
-            #Logger.warn("判定结果：", h2r.random(0))
+        #else:
+        #    Logger.info(self.conn.selected_alpn_protocol())
 
         time1 = time.time()
         self.status = 'in response func.'
@@ -200,37 +209,31 @@ class ServerResponse:
             self.conn.close()
   
             return 0
+        #Logger.warn(self.data)
 
-        if self.data.get("host") == None or self.data.get("path") == None:
+        if self.data['headers'].get("host") == None or self.data.get("path") == None:
             return
 
-        Logger.info("请求路径: ", self.data['host'] + self.data['path'])
+        Logger.info("请求路径: ", self.data['headers']['host'] + self.data['path'])
 
-        setLog("IP:"+str(self.ip)+"|Path:"+self.data['host'] + self.data['_originPath'])
-
-        
-
-        #Logger.warn(self.data)
+        setLog("IP:"+str(self.ip)+"|Path:"+self.data['headers']['host'] + self.data['path'])
 
         #绑定域名功能，停用。
         #if not self.data.get("host", None) in bind_domains and not isIPv4(self.data.get("host")):
         #    self.err("内部错误", "未绑定的域名，请在配置中添加。")
         #    return
-        #print(self.data)
 
         #判断是否是长连接
-        if (self.data.get("connection") == 'keep-alive' or already_keep_alive) and not self.PythonFileCloseConnect:
-            self.header.set("Connection", 'keep-alive')
+        if (self.data['headers'].get("connection") == 'keep-alive' or already_keep_alive) and not self.PythonFileCloseConnect:
+            self.header.set("connection", 'keep-alive')
             self.header.set("keep-alive", "timeout="+str(config['timeout'])+", max="+str(config['keep-alive-max']))
             self.header.set(":ResponseTimes", str(already_keep_alive))
             #Logger.warn(self.data)
         else:
-            self.header.set("Connection", "close")
-
+            self.header.set("connection", "close")
         
-
         #判断是否是表单信息
-        if self.data.get("content-type", None) == 'multipart/form-data':
+        if self.data['headers'].get("content-type", None) == 'multipart/form-data':
             self.uploadFile(self.data)
         else:
             try:
@@ -253,6 +256,7 @@ class ServerResponse:
                     self.CommonFileHandle(self.data)
 
             except Exception as e:
+                import traceback
                 Logger.error(e, "(at line", e.__traceback__.tb_lineno,")")
                 Logger.error(traceback.format_exc())
 
@@ -262,7 +266,7 @@ class ServerResponse:
         self.status = 'kill me.'
 
         try:
-                if (self.data.get("connection") == 'keep-alive' or already_keep_alive) and not self.PythonFileCloseConnect:
+                if (self.data['headers'].get("connection") == 'keep-alive' or already_keep_alive) and not self.PythonFileCloseConnect:
                     if not already_keep_alive >= int(config['keep-alive-max']):
                         res = ServerResponse(self.ip, self.ident)
                         thr = Thread(target=res.response, args=(self.conn, self.collection, already_keep_alive+1))
@@ -281,10 +285,11 @@ class ServerResponse:
                     self.conn.close()
                     return
         except Exception as e:
-                print(e)
+                import traceback
+                print(e, traceback.format_exc())
         
     def set_cookie(self, key, val, expires=3600):
-        self.header.set("Set-Cookie", "%s=%s; Expires=%s;"%(key, val, expires), True)
+        self.header.set("set-cookie", "%s=%s; Expires=%s;"%(key, val, expires), True)
     def set_header(self, key, val):
         self.header.set(key, str(val))
     def set_statuscode(self, code, content): #404, File not found
@@ -295,20 +300,24 @@ class ServerResponse:
             if(isinstance(val[i], str)):
                 val[i] = ParseString(val[i], self.var)
         print(*val, **arg, file=self.cache2)
-    def getGlobal(self, conn):
+    def finish_send(self, onEC):
+        onEC() if onEC else None
+    def getGlobal(self, onHF, onEC):
         globals_var = {}
         globals_var['set_cookie']       = self.set_cookie
         globals_var["set_header"]       = self.header.set
-        globals_var['finish_header']    = self.finish_header
+        globals_var['finish_header']    = lambda: self.finish_header(onHF)
+        globals_var['finish_send']      = lambda: self.finish_send(onEC)
         globals_var['set_statuscode']   = self.set_statuscode
-        globals_var["print"]            = self.FinishReturn
-        globals_var['include']          = lambda path: self.include(path, conn=conn)
+        globals_var["print"]            = lambda *arg, **args: self.FinishReturn(*arg, **args)
+        globals_var['isHTTP2']          = self.inHTTP2
+        globals_var['include']          = lambda path: self.include(path)
         globals_var['set_disable_etag'] = self.setDisableETag
         globals_var['_POST']            = self.data['postdata']
         globals_var['_GET']             = self.data['getdata']
         globals_var['_REWRITE']         = self.data['rewritedata']
         globals_var['_COOKIE']          = self.data['cookie']
-        globals_var['_HEADER']          = self.data
+        globals_var['_HEADER']          = self.data['headers']
         globals_var['Logger']           = Logger
         globals_var['this']             = self
         globals_var['_FILE']            = {}
@@ -320,33 +329,44 @@ class ServerResponse:
     @profile
     def uploadFile(self, data):
         self.status = 'in uploadFile func.'
-        if data.get("boundary"):
+        if data['headers'].get("boundary"):
             if data['path'][-3:] == '.py':
-                x = parsingUpdateFile(self.connfile, data['boundary'], self.conn)
+                x = parsingUpdateFile(self.connfile, data['headers']['boundary'], self.conn, data)
                 if not len(x) == 0:
                     do = {"_FILE":x[0], "_DATA":x[1]}
                 else:
                     do = {}
                 self.PythonFileHandle(data, do)
                 return
-            x = parsingUpdateFile(self.connfile, data['boundary'], self.conn)
-            self.PythonFileHandle(data, {"_FILE":x[0], "_DATA":x[1]})
+            x = parsingUpdateFile(self.connfile, data['headers']['boundary'], self.conn, data)
+            self.CommonFileHandle(data, glo={"_FILE":x[0], "_DATA":x[1]})
         return
 
     @profile
-    def PythonFileHandle(self, data, glo={}, conn=None, onHeaderFinish=None):
-        conn = conn if conn else self.conn
-        #Logger.warn(conn)
+    def PythonFileHandle(self, data, glo={}, onHeaderFinish=None, onEndCallback=None):
+        conn = self.conn
+        if not self.inHTTP2:
+            conn.psend = conn.send
+            def s(b):
+                nonlocal conn
+                try:
+                    conn.psend(b)
+                except Exception as e:
+                    Logger.error(e)
+            conn.send = s
+        header = self.header
+        #ThreadLock.acquire()
         self.status = 'in PythonFileHandle func.'
 
         if config['python'] == False:
             #判断配置文件是否禁用了 Python web功能
             return
 
-        self.header.remove("Connection")
-        self.header.remove("keep-alive")
-        self.header.set("Connection", "close")
-        self.PythonFileCloseConnect = True
+        if not self.inHTTP2:
+            self.header.remove("connection")
+            self.header.remove("keep-alive")
+            self.header.set("connection", "close")
+            self.PythonFileCloseConnect = True
         if os.path.isfile(ServerPath+"/"+data['path']):
             realpath = ServerPath+"/"+data['path']
             with open(realpath, 'rb') as f:
@@ -363,10 +383,10 @@ class ServerResponse:
                 matchFile = re.findall(i, realpath)
                 if matchFile:
                     header_head = headersetting[i]
-                    self.header.set(header_head[0], header_head[1]);
+                    header.set(header_head[0], header_head[1]);
 
             #配置环境变量
-            globals_var = self.getGlobal(conn).copy()
+            globals_var = self.getGlobal(onHeaderFinish, onEndCallback).copy()
             self.var = globals_var
 
             for i in glo:
@@ -377,9 +397,13 @@ class ServerResponse:
                 codeCompile = compile(PythonFileCode, '', 'exec')
                 exec(codeCompile, self.var)
 
+                #onEndCallback() if onEndCallback else 1
+                Logger.error("CODE FINISH")
+
                 del globals_var, PythonFileCode
             except Exception as e:
-                self.err("codeerror", e, traceback.format_exc(), conn=conn)
+                self.err("codeerror", e, traceback.format_exc())
+                #ThreadLock.release()
                 return
 
             if not self.finish:
@@ -391,17 +415,21 @@ class ServerResponse:
                 Mode304 = False
                 if self.ETagMode:
                     ETag    = getHash(pythonPrintContent)
-                    ClientETag = data.get('if-none-match')
+                    ClientETag = data['headers'].get('if-none-match')
                     if ClientETag and ClientETag == ETag:
-                        self.header.set(0, "HTTP/1.1 304 Not Modified")
-                        self.header.remove("Content-Length")
+                        header.set(0, "HTTP/1.1 304 Not Modified")
+                        header.remove("content-length")
                         Mode304 = True
+                        if self.inHTTP2:
+                            onHeaderFinish = lambda: header.send(5)
                     else:
-                        self.header.set("ETag", ETag)
+                        header.set("ETag", ETag)
 
                 datas = b''
                 if not self.inHTTP2:
-                    datas = self.header.encode()+self.SingleLineFeed
+                    datas = header.encode()+self.SingleLineFeed
+                    #conn.send(header.encode()+self.SingleLineFeed)
+                    pass
                 else:
                     onHeaderFinish() if onHeaderFinish else 1
                 datas += (pythonPrintContent if not Mode304 else b"")+self.LineFeed
@@ -410,25 +438,100 @@ class ServerResponse:
                     sendTimes = len(datas) // self.cachesize
                     endSize   = len(datas) - sendTimes * self.cachesize
                     for i in range(sendTimes):
-                        print(i)
-                        conn.send(datas[self.cachesize*i: self.cachesize*(i+1)])
+                        NowData = datas[self.cachesize*i: self.cachesize*(i+1)]
+                        conn.send(NowData)
+
                     conn.send(datas[-endSize:])
+                    conn.send(self.LineFeed)
                 else:
-                    conn.sendall(datas)
+                    conn.send(datas)
+                    conn.send(self.LineFeed)
+
                 if self.inHTTP2:
                     conn.send(b'', 1)
-                
         else:
-            self.err("404", conn=conn)
+            self.err("404")
+        #ThreadLock.release()
 
     @profile
-    def CommonFileHandle(self, data, conn=None, onHeaderFinish=None):
-        conn = conn if conn else self.conn
-        #Logger.warn(conn)
+    def PyInHtmlHandle(self, data, glo={}, onHeaderFinish=None):
+        #self.CommonFileHandle(data, onHeaderFinish=onHeaderFinish, retToPy=False)
+        #return
+        realpath = ServerPath+"/"+data['path']
+
+        if os.path.isfile(realpath):
+            with open(realpath, 'r', encoding='UTF-8') as f:
+                content = f.read()
+            
+            if not "<!-- py -->" in content:
+                self.CommonFileHandle(data, onHeaderFinish, False)
+                return
+
+            if not self.inHTTP2:
+                self.header.remove("connection")
+                self.header.remove("keep-alive")
+                self.header.set("connection", "close")
+                self.PythonFileCloseConnect = True
+            
+            M = r"(<\?py)(.*?)(\?>)"
+            pycodes = re.findall(M, content, flags=re.S)
+
+            env = self.getGlobal(onHeaderFinish, None)
+            del env['print']
+            del env['finish_header']
+
+            ctxs = {}
+            ID   = 0
+            
+            def p(*arg, **args):
+                nonlocal ctxs, ID
+                p = ''
+                for i in arg:
+                    p += str(i)+" "
+                if ctxs.get(ID, None):
+                    ctxs[ID] += p
+                    return
+                ctxs[ID] = p
+
+            env['print'] = p
+            env = dict_inone(env, glo)
+
+            self.header.set("content-type", "text/html")
+
+            #Logger.error(pycodes)
+
+            for code in pycodes:
+                c   = code[1]
+                if len(c.split("\n")) == 1: #单行代码
+                    c = c.lstrip()
+                exec(c, env)
+                content = content.replace(code[0]+code[1]+code[2], ctxs.get(ID, ""), 1)
+
+                ID += 1
+            
+            if self.inHTTP2:
+                onHeaderFinish() if onHeaderFinish else None
+            else:
+                self.conn.send(self.header.encode()+self.SingleLineFeed)
+            self.conn.send(content.encode("UTF-8"))
+
+            if self.inHTTP2:
+                self.conn.send(self.LineFeed, 1)
+
+
+    @profile
+    def CommonFileHandle(self, data,  onHeaderFinish=None, retToPy=True, glo={}):
+        header = self.header
+        conn = self.conn
+
         self.status = 'in CommonFileHandle func.'
 
         if data['path'][-3:] == '.py':
-            self.PythonFileHandle(data)
+            self.PythonFileHandle(data, glo=glo)
+            return
+        
+        if data['path'][-4:] in ('html', '.htm') and retToPy:
+            self.PyInHtmlHandle(data, onHeaderFinish=onHeaderFinish, glo=glo)
             return
 
         realpath = ServerPath+"/"+data['path']
@@ -439,16 +542,16 @@ class ServerResponse:
 
             #print(data)
 
-            if 'range' in data: 
+            if 'range' in data['headers']: 
                 #断点续传功能
-                ranges = getRange(data['range'].split("=")[1].strip())
+                ranges = getRange(data['headers']['range'].split("=")[1].strip())
 
                 size = (ranges[1] + 1 if not ranges[1] == '' else size) - ranges[0]
-                self.header.set("Content-Range", "bytes %s-%s/%s"%(ranges[0], ranges[1] if not ranges[1] == '' else tsize-1, tsize))     
-                self.header.set(0, "HTTP/1.1 206 Partial Content")
+                header.set("Content-Range", "bytes %s-%s/%s"%(ranges[0], ranges[1] if not ranges[1] == '' else tsize-1, tsize))     
+                header.set(0, "HTTP/1.1 206 Partial Content")
                     
-            self.header.set("Content-Type", FileType(data['path']))
-            self.header.set("Content-Length", "%s"%(size if not 'range' in data else (ranges[1]+1 if not ranges[1] == '' else tsize)-ranges[0]))
+            header.set("Content-Type", FileType(data['path']))
+            header.set("Content-Length", "%s"%(size if not 'range' in data['headers'] else (ranges[1]+1 if not ranges[1] == '' else tsize)-ranges[0]))
 
             #用户自定义头信息
             headersetting = opts.get("headers")
@@ -457,14 +560,14 @@ class ServerResponse:
                 matchFile = re.findall(i, realpath)
                 if matchFile:
                     header_head = headersetting[i]
-                    self.header.set(header_head[0], header_head[1])
+                    header.set(header_head[0], header_head[1])
             
             with open(realpath, 'rb') as f:
-                if 'range' in data:
+                if 'range' in data['headers']:
                     #断点续传
                     
                     if not self.inHTTP2:
-                        h = self.header.encode()+self.SingleLineFeed
+                        h = header.encode()+self.SingleLineFeed
                         conn.send(h)
                     else:
                         onHeaderFinish() if onHeaderFinish else 1
@@ -505,17 +608,19 @@ class ServerResponse:
                     if not os.path.getsize(realpath) >= config['maxsize-for-etag']:
                         #判断文件大小是否大于配置中设置的最大大小，否则不使用ETag浪费服务器资源。
                         ETag       = getHashByFile(open(realpath, 'rb'))
-                        ClientETag = data.get('if-none-match')
+                        ClientETag = data['headers'].get('if-none-match')
                         if ClientETag and ClientETag == ETag:
-                            self.header.set(0, "HTTP/1.1 304 Not Modified")
-                            self.header.remove("Content-Length")
+                            header.set(0, "HTTP/1.1 304 Not Modified")
+                            header.remove("Content-Length")
                             Mode304 = True
+                            if self.inHTTP2:
+                                onHeaderFinish = lambda: header.send(5)
                         else:
-                            self.header.set("ETag", ETag)
+                            header.set("ETag", ETag)
 
                     #发送响应头
                     if not self.inHTTP2:
-                        h = self.header.encode()+self.SingleLineFeed
+                        h = header.encode()+self.SingleLineFeed
                         conn.send(h)
                     else:
                         onHeaderFinish() if onHeaderFinish else 1
@@ -544,10 +649,10 @@ class ServerResponse:
                     
                     
         else:
-            self.err("404", conn=conn)
+            self.err("404")
 
     @profile
-    def err(self, type_, exception='', detail='', conn=None):
+    def err(self, type_, exception='', detail=''):
         if not self.inHTTP2:
 
             header = Header()
@@ -576,12 +681,12 @@ class ServerResponse:
                 self.conn.send(header.encode()+self.SingleLineFeed)
                 self.conn.send((ERRPage().format(type_, http_errorcodes[str(type_)][0], http_errorcodes[str(type_)][1])).encode())
         else:
-            self.http2Res.error(type_, exception, detail, conn)
+            self.http2Res.error(type_, exception, detail, self.conn)
             Logger.error("页面错误:", type_, exception, detail, self.data['path'])
 
 
     @profile
-    def include(self, path, conn):
+    def include(self, path):
         pathx=ServerPath+"/"+os.path.split(self.data['path'])[0]
         path = pathx+"/"+path
 
@@ -601,17 +706,25 @@ class ServerResponse:
             for i in x:
                 self.var[i] = x[i]
         else:
-            self.err("codeerror", "Cannot find module in path: '%s'"%path, conn=conn)
+            self.err("codeerror", "Cannot find module in path: '%s'"%path)
 
-    def finish_header(self):        
+    def finish_header(self, onHeaderFinish=None):
         """用于结束设置 HTTP响应头，将 print 函数输出对象转为 socket 连接"""
-        h = self.header.encode()+self.SingleLineFeed
-        self.conn.sendall(h)
-        self.finish = True
-        self.conn.sendall(self.cache2.read().encode())
         Logger.info("Finish header.")
+        conn = self.conn
+        if self.inHTTP2:
+            onHeaderFinish() if onHeaderFinish else None
+        else:
+            h = self.header.encode()+self.SingleLineFeed
+            conn.sendall(h)
+        self.finish = True
+        data = self.cache2.read().encode()
+        conn.send(data) if not len(data) == 0 else None
+        
+
     def FinishReturn(self, *arg, **args):
         "判断是否使用了 finish_header 以 print 直接向 socket 输出"
+        conn = self.conn
         if not self.finish:
             self.set_html(*arg, **args)  
         else:
@@ -621,9 +734,10 @@ class ServerResponse:
             for i in range(len(arg)):
                 v = arg[i]
                 try:
-                    self.conn.send(v+(sep if not i == len(arg)-1 else b''))
+                    conn.send(v+(sep if not i == len(arg)-1 else b''))
+                    #conn.send(end)
                 except:
-                    if getattr(self.conn, "_closed"):
+                    if getattr(self.conn, "_closed", False):
                         return
                     continue
     def setDisableETag(self, disabled):
@@ -641,12 +755,12 @@ class Header:
     def __init__(self):
         self.headers = {}
         self.headers[0] = "HTTP/1.1 200 OK"
-        self.headers["Accept-Ranges"] = "bytes"
-        self.headers["Connection"] = 'keep-alive'
+        self.headers["accept-ranges"] = "bytes"
+        self.headers["connection"] = 'keep-alive'
         self.headers["Content-Encoding"] = "identity"
         self.headers["Transer-Encoding"] = "identity"
-        self.headers["Date"] = time.asctime()
-        self.headers["Server"] = SERVER+VERSION
+        self.headers["date"] = time.asctime()
+        self.headers["server"] = SERVER+VERSION
         
     def set(self, key, val, diejia=False):
         if key in self.headers:
