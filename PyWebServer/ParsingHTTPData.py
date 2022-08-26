@@ -3,32 +3,22 @@ import CacheModule as cache
 
 from server_config import *
 from Logger import Logger
-#from threading import Thread
-#from functions import stop_thread
-#from memory_profiler import *
-#prof = profile
+
 import time
 import os
 import threading
 from functions import *
-
-def profile(func):
-    def x(*arg, **args):
-        l = time.time()
-        o = func(*arg, **args)
-        p = time.time()
-        with open("logs/log.txt", 'a') as f:
-            f.write(time.ctime()+"-->:函数"+func.__name__+" 耗时:"+str(p-l)+";返回值:"+str(o)+"\n")
-        return o
-    return x
-prof = profile
-
+import ssl as sslm
 
 Logger = Logger()
 abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 ott = '1234567890'
 ope = '-=.'
 quot = (b'"', b"'", "'", '"')
+PluginManager = None
+
+def ParsingHTTPData_SetPluginManager(PluginManager):
+    globals()['PluginManager'] = PluginManager
 
 def toInt(integer):
     "将Accept-Language中的q值转换为具体数字"
@@ -38,25 +28,25 @@ def toInt(integer):
     except:
         return 0
 
-@prof
-def parsingUpdateFile(connf, bd, conn):
+@profile
+def parsingUpdateFile(connf, bd, conn, data):
     """该函数用于解析正在上传的文件(通过HTTPSOCKET连接)。
     connf: Connecting socket(makefile); bd=boundary; conn: Connecting socket"""
 
     caf = cache.cachefile()
 
     while not caf.endswith(b"--"+bd.encode()+b"--\r\n"):
-        if getattr(conn, "_closed"):
-            return ""
         d = connf.readline()
         if d == b'':
             break
         caf.write(d)
-    connf.close()
+    
+    #connf.close()
+
     data = parsingCacheFile(caf, bd)
     return data
 
-@prof
+@profile
 def parsingCacheFile(file, bd):
     """该函数用于解析已被储存到本地的用户上传文件。
     file: Cache uploaded files; bd=boundary: HTTP Uploaded Boundary"""
@@ -72,9 +62,13 @@ def parsingCacheFile(file, bd):
     while not stop:
         content = file.readline()
         header = {}
+        if content == b'':
+            break
+        
         if content == bd+b"--\r\n":
             break
         if content == bd+b'\r\n':
+            
 
             while 1:
                 ctx = file.readline().strip()
@@ -136,14 +130,11 @@ def parsingCacheFile(file, bd):
                         break
                     ctx += line
                     
-                datas[header.get('content-disposition')['name']] = ctx.decode()
+                datas[header.get('content-disposition')['name']] = ctx.strip().decode()
 
     return files, datas
 
-@prof
-def parsingHeader(connf,conn):
-        content = b''
-        headers = {
+HEADER_MODULE = {
             "getdata":{},
             "postdata":{},
             "rewritedata":{},
@@ -151,62 +142,101 @@ def parsingHeader(connf,conn):
             "path":"",
             "language":"",
             "cookie":{}
-        }
+}
 
-        @profile
-        def getContent():
-            #获取HTTP头原始数据
-            nonlocal content, headers, connf
-            try:
-                while not content[-4:] == b'\r\n\r\n':
-                    if getattr(conn, "_closed"):
-                        return ("", "")               #此时socket被关闭，正常来算应该报个错
-                    try:
-                        ctx = connf.readline()
-                    except:
-                        continue
+@profile
+def parsingHeader(connf, conn):
+    content = b''
+    headers = HEADER_MODULE.copy()
 
-                    if ctx == b'\r\n' or ctx == b'':  #无信息退出，以免导致高cpu占用(长连接)
-                        break
+    @profile
+    def getContent():
+        #获取HTTP头原始数据
+        nonlocal content, headers, connf
+        try:
+            while 1:
+                if content[-4:] == b'\r\n\r\n':
+                    print("QUIT BECAUSE", content)
+                    print("NEXT READ:", connf.readline())
+                    break
                     
-                    parsedLine = parsingHeaderLine(ctx.decode())
-                    
-                    if len(parsedLine) == 3:
-                        headers[parsedLine[0][0]] = parsedLine[0][1]
-                        headers[parsedLine[1][0]] = parsedLine[1][1]
+                ctx = b''
+                try:
+                    ctx = connf.readline()
+                except sslm.SSLError as e:
+                    if "CERTIFICATE_UNKNOWN" in str(e):
+                        Logger.warn("证书错误:", str(e).split("]")[1])
                     else:
-                        headers[parsedLine[0]] = parsedLine[1]
-                    if parsedLine == b'':
+                        Logger.error("证书严重错误:", e)
                         break
+                except Exception as e:
+                    Logger.error("QUIT:", e)
+                    break #-> continue   读取失败，退出读取
 
-                    content += ctx
-            except Exception as e:
-                print("Error in parsing header:", e)
-                content = b''
-            
-        #防止读取HTTP请求头超时
-        getctxThread = threading.Thread(target=getContent)
-        getctxThread.start()
-        getctxThread.join(config['timeout'])
-        if getctxThread.is_alive():
-            stop_thread(getctxThread)
-            return content, headers
+                if ctx == b'\r\n' or ctx.strip() == b'':  #无信息退出，以免导致高cpu占用(长连接)
+                    #print("QUIT BECAUSE EMPTY CONTENT-->", ctx)
+                    break
+                
+                parsedLine = parsingHeaderLine(ctx.decode())
 
-
-        if headers.get("content-type", "") == 'application/x-www-form-urlencoded':
-            if headers.get("method", "") == "POST":
-                if headers.get("content-length", ""):
-                    #读取POST信息，目前没有做内存溢出的保护
-                    length = headers.get("content-length")
-
-                    headers['postdata'] = decodePOST(connf.read(length).decode())
+                    
+                    
+                if len(parsedLine) == 3:
+                    if parsedLine[0][0] == "path":
+                        headers['path'] = parsedLine[0][1]
+                    headers['headers'][parsedLine[0][0]] = parsedLine[0][1]
+                    headers['headers'][parsedLine[1][0]] = parsedLine[1][1]
                 else:
-                    headers['postdata'] = decodePOST(connf.readline().decode())
+                    headers['headers'][parsedLine[0]] = parsedLine[1]
+                if parsedLine == b'':
+                    break
+
+                content += ctx
+        except Exception as e:
+            print("Error in parsing header:", e)
+            content = b''
+            
+    #防止读取HTTP请求头超时
+    #getctxThread = threading.Thread(target=getContent)
+    #getctxThread.start()
+    #getctxThread.join(config['timeout'])
+    #if getctxThread.is_alive():
+    #    stop_thread(getctxThread)
+    #    return content, headers
+    getContent()
+
+    if headers['headers'].get("content-type", "") == 'application/x-www-form-urlencoded':
+        if headers['headers'].get("method", "") == "POST":
+            if headers['headers'].get("content-length", ""):
+                #读取POST信息，目前没有做内存溢出的保护
+                length = int(headers['headers'].get("content-length"))
+
+                headers['postdata'] = decodePOST(connf.read(length).decode())
+            else:
+                headers['postdata'] = decodePOST(connf.readline().decode())
         
-        if headers.get("path",""):
-            #解析GET数据并存储于getdata中
-            headers['path'], headers['getdata'] = decodeGET(headers.get("path"))
-        return content, headers
+    if headers['headers'].get("path",""):
+        #解析GET数据并存储于getdata中
+        headers['_originPath'] = headers['path']
+        headers['path'], headers['getdata'] = decodeGET(headers.get("path"))
+        
+    return content, headers
+
+def decodeContentType(ctx):
+    "解析 Content-Type 数据"
+    if ctx == None:
+        return {"type":None, "boundary":None}
+
+    ctx = ctx.split(";")
+    tp, bd = None, None
+    for i in range(len(ctx)):
+        if i == 0:
+            tp = ctx[i]
+        elif i == 1:
+            bd = ctx[i]
+    if bd and "=" in bd:
+        bd = bd.split("=")[1]
+    return {"type":tp, "boundary":bd}
 
 @profile
 def decodePOST(line):
@@ -244,8 +274,22 @@ def decodeGET(line):
             n += 1
             arr[n] = uparse.unquote(i)
     return path, arr
-            
-@prof
+    
+@profile            
+def decodeCookie(ctx):
+    "解析 Cookie 数据"
+    cookies = ctx.split(";")
+    kv = {}
+
+    for i in cookies:
+            if '=' in i:
+                g = i.split("=")
+                key = g[0].strip()
+                val = '='.join(g[1:])
+                kv[key] = val
+    return kv
+
+@profile
 def parsingHeaderLine(i):
     "用于解析一行HTTP Header。 i: string(http header)"
     if i == '':
@@ -258,6 +302,7 @@ def parsingHeaderLine(i):
         o = i.split(' ')
         return ["path", uparse.unquote(o[1])],['method', method],1
 
+        '''
     elif i[0:9].upper() == 'USER-AGENT':
         agent = ':'.join(i.split(':')[1:]).strip()
         return ['user-agent', agent]
@@ -271,7 +316,7 @@ def parsingHeaderLine(i):
         conn = ':'.join(i.split(":")[1:]).strip()
         return ['connection', conn]
     elif i[0:14].upper() == 'CONTENT-LENGTH':
-        return ['content-length', int(i.split(":")[1].strip())]
+        return ['content-length', int(i.split(":")[1].strip())]'''
     
     #elif i[0:15].upper() == 'ACCEPT-LANGUAGE':
     #    lang = ':'.join(i.split(":")[1:]).strip()
