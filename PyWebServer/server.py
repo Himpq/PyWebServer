@@ -41,6 +41,22 @@ ssl._create_default_https_context = ssl._create_unverified_context
 
 SERVER = "PWS"
 VERSION = "/4.9"
+
+class CheatingSocket(socket.socket):
+    def __init__(self, *arg, **args):
+        self.retCtx = None
+        super().__init__(*arg, **args)
+        
+    def setRetCtx(self, retCtx):
+        self.retCtx = retCtx
+    def recv(self, *arg, **args):
+        if self.retCtx:
+            ret = self.retCtx
+            self.retCtx = None
+            return ret
+        return super().recv(*arg, **args)
+
+
 #服务器
 
 class Server:
@@ -73,25 +89,7 @@ class Server:
             try:
                 conn, addr = self.socket.accept()
 
-                if self.ssl:
-                    try:
-                        useHTTPS = True
-                        sslconn = self.ssl_context.wrap_socket(conn, server_side=True, do_handshake_on_connect=config['ssl-doshakehand'])
-                    except ssl.SSLError as e:
-                        if "CERTIFICATE_UNKNOWN" in str(e):
-                            Logger.warn("证书存在问题：", str(e))
-                        elif "http request" in str(e):
-                            Logger.warn("客户端正在请求 HTTP。")
-                            useHTTPS = False
-                            #conn.send(b'HTTP/1.1 302 Do this!\r\nlocation:https://'+self.ip.encode()+b":"+str(self.port).encode()+b'\r\n\r\n')
-                            #conn.close()
-                        else:
-                            Logger.error("证书存在严重问题：", e)
-                            return
-                    else:
-                        if useHTTPS:
-                            conn = sslconn
-                obj  = ServerResponse(addr, ident)
+                obj  = ServerResponse(addr, ident, self)
                 user = Thread(target=obj.response, args=(conn, self.coll))
                 user.start()
                 Logger.info("接收来自", addr, "的请求 | ID:", ident)  #, "线程状态:", user)
@@ -138,7 +136,7 @@ class ServerResponse:
     # HTTP/1.1 的响应
     def __init__(self, ip, ident, server=None):
         
-        #self.server = server
+        self.server = server
         self.ident = ident  #没啥用
         
         self.ip = ip
@@ -171,6 +169,34 @@ class ServerResponse:
         return newObj
 
     def response(self, conn, coll, already_keep_alive=0):
+        if self.server.ssl and not self.inHTTP2:
+            dup = conn.dup()
+
+            try:
+                useHTTPS = True
+                sslconn = self.server.ssl_context.wrap_socket(conn, server_side=True, do_handshake_on_connect=config['ssl-doshakehand'])
+            except ssl.SSLError as e:
+                if "CERTIFICATE_UNKNOWN" in str(e):
+                    Logger.warn("证书存在问题：", str(e))
+                    return
+                elif "http request" in str(e):
+                    Logger.warn("客户端正在请求 HTTP。")
+                    useHTTPS = False
+                    try:
+                        ctx = dup.recv(1024).decode()
+                    except:
+                        return
+                    header = parsingHeaderByString(ctx, noMethod=True)
+                    dup.send(b'HTTP/1.1 302 Do this!\r\nlocation:https://'+((str(setting['ssljump-domain']).encode()+b':'+str(self.server.port).encode()) if not header.get("host") else header.get("host").encode())+(b'/' if not header.get("path") else b'/'+header.get('path').encode())+b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
+                    dup.close()
+                    return
+                else:
+                    Logger.error("证书存在严重问题：", e)
+                    return
+            else:
+                if useHTTPS:
+                    conn = sslconn
+
         self.clearEnvironment(conn, coll, True)
 
         Logger.comp("[长连接] 响应:", self.ip) if already_keep_alive else Logger.comp("响应IP: ", self.ip)
@@ -209,10 +235,12 @@ class ServerResponse:
             self.conn.close()
   
             return 0
-        #Logger.warn(self.data)
 
         if self.data['headers'].get("host") == None or self.data.get("path") == None:
             return
+
+        Logger.warn(self.data)
+        Logger.warn(self.ysdata)
 
         Logger.info("请求路径: ", self.data['headers']['host'] + self.data['path'])
 
@@ -346,14 +374,15 @@ class ServerResponse:
     def PythonFileHandle(self, data, glo={}, onHeaderFinish=None, onEndCallback=None):
         conn = self.conn
         if not self.inHTTP2:
-            conn.psend = conn.send
+            #conn.psend = conn.send
+            #setattr(conn, "psend", conn.send)
             def s(b):
                 nonlocal conn
                 try:
                     conn.psend(b)
                 except Exception as e:
                     Logger.error(e)
-            conn.send = s
+            #conn.send = s
         header = self.header
         #ThreadLock.acquire()
         self.status = 'in PythonFileHandle func.'
