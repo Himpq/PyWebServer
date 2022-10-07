@@ -145,6 +145,23 @@ HEADER_MODULE = {
 }
 
 @profile
+def parsingHeaderByString(content, noMethod=False):
+    headers = HEADER_MODULE.copy()
+    for line in content.split("\r\n"):
+        print("line", line)
+        parsedLine = parsingHeaderLine(line, noMethod)
+        print(parsedLine)
+
+        if len(parsedLine) == 3:
+            if parsedLine[0][0] == "path":
+                headers['path'] = parsedLine[0][1]
+                headers['headers'][parsedLine[0][0]] = parsedLine[0][1]
+                headers['headers'][parsedLine[1][0]] = parsedLine[1][1]
+        else:
+            headers['headers'][parsedLine[0]] = parsedLine[1]
+    return headers
+
+@profile
 def parsingHeader(connf, conn):
     content = b''
     headers = HEADER_MODULE.copy()
@@ -290,8 +307,8 @@ def decodeCookie(ctx):
     return kv
 
 @profile
-def parsingHeaderLine(i):
-    "用于解析一行HTTP Header。 i: string(http header)"
+def parsingHeaderLine(i, noMethod=False):
+    "用于解析一行HTTP Header。 i: string(http header), noMethod: bool(因wrap_socket丢失的GET/POST信息)"
     if i == '':
         return ['', '']
     x = i.split(":")
@@ -344,4 +361,9 @@ def parsingHeaderLine(i):
         if ":" in i:
             return [i.split(":")[0].strip().lower(),':'.join(i.split(":")[1:]).strip()]
         else:
+            if noMethod:
+                if " " in i and "HTTP/1.1" in i:
+                    ret = i.split(' ')
+                    path = ret[ret.index("HTTP/1.1")-1]
+                    return ['path', uparse.unquote(path)], ['method', None], 1
             return ['', '']
