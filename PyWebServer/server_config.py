@@ -14,6 +14,7 @@ InstallPath={1}
 ip=("")
 port=80
 ssl=false
+ssljump-domain=localhost
 
 [config]
 language-wrong-error=false
@@ -29,10 +30,11 @@ server-status=NORMAL
 errorpage-path=./ErrorPages/error.html
 ssl-path=('cert.crt','key.key','ca.crt')
 ssl-password=
-ssl-doshakehand=True
+ssl-doshakehand=true
 maxsize-for-etag = (1024*1024*100)
 enable-plugin=true
 support-protocols=(["spdy/3.1", "http/1.1"])
+encoding=(['gzip', 'identity'])
 
 [black_list]
 blacklist=
