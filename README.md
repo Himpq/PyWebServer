@@ -1,6 +1,7 @@
 # PyWebServer
 ![PyWebServer](http://pws.himpqblog.cn/PyWebServer.png)
-一个小巧的 Python Web 项目，一位初中生闲着没事打着玩的东西
+一个小巧的 Python Web 项目，一位初中生闲着没事打着玩的东西  
+测试IP: [WNetdisk](http://114.55.116.36:99/WNetdisk/)
 
 [官网以及教程](http://pws.himpqblog.cn) 
 
@@ -78,5 +79,5 @@ ETag 缓存支持设置最小计算缓存大小，小于该大小阈值的文件
 * [v4.9] 支持 HTTP2 的 POST, 文件上传(multipart/form-data)，并且增添新模式：  
 在 .htm, .html后缀的文档中可以使用“<?py ... ?>”执行 Python 代码。  
 2022-8-26 19:11  
-支持在单端口上绑定HTTP,HTTPS功能，但访问HTTP会强制跳转HTTPS。
+支持在单端口上绑定HTTP,HTTPS功能，但访问HTTP会强制跳转HTTPS。  
 2022-10-7 12:36
