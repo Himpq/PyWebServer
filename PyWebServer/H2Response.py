@@ -7,10 +7,16 @@ import time
 from threading import Thread, Lock
 from ParsingHTTPData import decodeGET, decodePOST, decodeCookie, decodeContentType, parsingCacheFile
 import CacheModule as cf
+
 Logger = Logger()
+DT     = None
+
+def H2R_SetDT(dt):
+    global DT
+    DT = dt
 
 ThreadLock = Lock()
-GZIP_ENCODING = True
+GZIP_ENCODING = False
 
 HEADER_MODULE = {
             "getdata":{},
@@ -35,6 +41,7 @@ def JudgeH2(Conn):
             return False
         except:
             return False
+
 
 MagicContent = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 FrameTypes   = {
@@ -92,6 +99,7 @@ class ServerResponseHTTP2:
         self.uploadingStream = {}
         self.waitingPost     = {}
         self.streamCache     = {}
+        self.priority        = 1
 
     def getSettings(self, key):
         if key == 'header_table_size':
@@ -170,6 +178,7 @@ class ServerResponseHTTP2:
                 self.respondSetting(f)
             
             if f['type'] == "Headers":
+                #DT.addThread(Thread(target=self.respondHeader, args=(f,)), 4)
                 self.respondHeader(f)
 
             if f['type'] == "Ping":
@@ -216,7 +225,7 @@ class ServerResponseHTTP2:
             x.send(1)
             #self.goAway()
         except Exception as e:
-            print(e, "Thats why it close")
+            print(e)
 
     def uploadFile(self, f):
         sid = f['SID']
@@ -290,9 +299,14 @@ class ServerResponseHTTP2:
         obj.inHTTP2  = True
         obj.http2Res = self
 
+        Logger.warn("Choosing Response Method")
+
         if f['value']['header']['path'][-3:] == '.py':
+            Logger.warn("PythonFileHandle()")
             obj.PythonFileHandle(obj.data, glo=gloadd,  onHeaderFinish=lambda: header.send(4), onEndCallback=lambda: self.streams[f['SID']].send(b'', 1))
+            self.priority = obj.priority
         else:
+            Logger.warn("CommonFileHandle()")
             obj.CommonFileHandle(obj.data,  onHeaderFinish=lambda: header.send(4), glo=gloadd)
         
         self.needNewH1Response = True
@@ -363,7 +377,7 @@ class ServerResponseHTTP2:
         else:
             return self.decoder
     def getNewHPackEncoder(self):
-        if not self.encoder:
+        #if not self.encoder:
             from hpack import Encoder
             x = Encoder()
             x.header_table_size = self.getSettings("header_table_size") #65536
@@ -371,8 +385,8 @@ class ServerResponseHTTP2:
             x.max_allowed_table_size = self.getSettings("header_table_size") #65536
             self.encoder = x
             return x
-        else:
-            return self.encoder
+        #else:
+            #return self.encoder
 
 
 
@@ -397,28 +411,32 @@ class socketProxy:
     def makefile(self, t):
         return self.conn.makefile(t)
     def send(self, data, retry=5):
-        if self.isClosed:
-            return
-        self.proData += len(data)
-        try:
-            #setLog("["+self.self.ident+"] > "+str(data), "./logs/h2.log")
-            ThreadLock.acquire()
-            self.conn.send(data)
-            ThreadLock.release()
-        except Exception as e:
-            if 1:
-                if retry == 0:
-                    print("retry fell.")
-                    Logger.error("关闭 socket:", e)
-                    self.isClosed = True
-                    time.sleep(0.5)
-                    self.self.goAway()
-                    time.sleep(0.5)
-                    self.conn.close()
-                    return
-                print("Retry...", retry, e)
-                self.send(data,  retry-1)
+
+        def tsend():
+            if self.isClosed:
                 return
+            self.proData += len(data)
+            try:
+                #setLog("["+self.self.ident+"] > "+str(data), "./logs/h2.log")
+                #ThreadLock.acquire()
+                DT.ThreadLock.acquire()
+                self.conn.send(data)
+                DT.ThreadLock.release()
+            except Exception as e:
+                if 1:
+                    if retry == 0:
+                        print("retry fell.")
+                        Logger.error("关闭 socket:", e)
+                        self.isClosed = True
+                        self.self.goAway()
+                        self.conn.close()
+                        return
+                    print("Retry...", retry, e)
+                    self.send(data,  retry-1)
+                    return
+
+        tsend()
+
             
 class WindowUpdateFrame:
     def __init__(self, conn, sid, res):
@@ -486,7 +504,6 @@ class DataFrame:
     def send(self, flag, r=0):
         try:
             if not self.self.streams.get(self.sid) or self.self.streams[self.sid].isClosed:
-                Logger.error(self.sid, "乐不思蜀了")
                 return
             frame = None
             if self.self.getSettings("SETTINGS_MAX_FRAME_SIZE") < len(self.data):
@@ -500,7 +517,7 @@ class DataFrame:
             self.fh += int(flag).to_bytes(1, 'big')         #Flag
             self.fh += parsingRSID(r, self.sid)             #R and Stream ID
 
-            print("于", self.sid, "发送DATA FRAME!!!", len(self.data), flag)
+            #print("于", self.sid, "发送DATA FRAME!!!", len(self.data), flag)
             
             self.conn.send(self.fh+self.data)
 
@@ -510,8 +527,8 @@ class DataFrame:
 
             setLog("["+str(self.sid)+"] SEND_DATA_FRAME\n               --> data size: "+str(len(self.data))+"\n               --> content:\n                    "+str(self.data)[0:20]+"\n               --> flag: "+str(flag)+"\n               --> stream id: "+str(self.sid), "./logs/h2.log", 0)       #LOG here--------------------------
         except Exception as e:
-            #import traceback
-            print("无法发送Data帧：", e, )#traceback.format_exc())
+            import traceback
+            print("无法发送Data帧：", e, traceback.format_exc())
             setLog("["+str(self.sid)+"] ERROR_IN_SENDING_DATA_FRAME\n               --> Error: "+str(e)+"\n               --> stream id"+str(self.sid), "./logs/h2.log", 0)
             #self.self.streams[self.sid].isClosed = True
 
@@ -523,7 +540,7 @@ class HeaderFrame:
         self.headers = {}
         self.headers[":status"] = '200'
         self.headers["content-type"] = "text/html;charset=UTF-8"
-        self.headers["server"] = "PWS/6.0 With HTTP2"
+        self.headers["server"] = "PWS/6.1 With HTTP2"
         self.headers["date"] = ""
         self.headers['accept-ranges'] = 'bytes'
 
@@ -586,8 +603,10 @@ class H1toH2SocketStream:
         #    d = data
         #    data = d[0:self.self.getSettings("SETTINGS_MAX_FRAME_SIZE")]
         #    d = d[self.self.getSettings("SETTINGS_MAX_FRAME_SIZE"):]
+        #ThreadLock.acquire()
         frame = DataFrame(self.conn, data, self.sid, self.self)
         frame.send(flag, self.R)
+        #ThreadLock.release()
         #if d:
         #    self.send(d, flag)
     def makefile(self, x):
@@ -624,6 +643,8 @@ def ParsingHTTP2Frame(conn, self, frames=None):
     #帧头
     if cont == b'':
         return frames
+
+    print(cont)
     
     #print("FRAME_HEAD:",cont[0:9], cont)
     nF['length'] = int.from_bytes(cont[0:3], 'big')
