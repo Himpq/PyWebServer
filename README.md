@@ -1,6 +1,8 @@
 # PyWebServer
 ![PyWebServer](http://pws.himpqblog.cn/PyWebServer.png)
-一个小巧的 Python Web 项目，一位初中生闲着没事打着玩的东西  
+一个的 Python Web 项目，一位初中生闲着没事打着玩的东西  
+解码 HTTP2 部分使用了 hpack 模块，其余部分纯socket通讯  
+
 测试IP: [WNetdisk](http://114.55.116.36:99/WNetdisk/)
 
 [官网以及教程](http://pws.himpqblog.cn) 
@@ -9,6 +11,10 @@
 打包下载源码，安装hpack模块
 ```
 pip install hpack
+```
+OR  
+```
+pip install -r requirements.txt
 ```
 
 启动服务器：  
