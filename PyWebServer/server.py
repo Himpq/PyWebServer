@@ -824,7 +824,7 @@ a = None
 def test():
     global a
     a=Server(ip=ip, port=port)
-    a.open_SSL()
+    a.open_SSL() if setting['ssl'] else None
     a.start()
 
 if __name__ == '__main__':
