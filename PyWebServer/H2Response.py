@@ -1,22 +1,22 @@
 
 from Logger import Logger
-from functions import FileType, tryGetErrorDetail, prettyPrint, kvListToDict, getBit, getRangeBit, toH1Format, setLog, gzip_encode
+from functions import FrameParser, HeaderParser, STR, priorityHigh, isNum, FileType, tryGetErrorDetail, prettyPrint, kvListToDict, getBit, getRangeBit, toH1Format, setLog, gzip_encode, initLogThread
 from server_config import ServerPath
 from server_config import *
 import time
 from threading import Thread, Lock
 from ParsingHTTPData import decodeGET, decodePOST, decodeCookie, decodeContentType, parsingCacheFile
 import CacheModule as cf
+import traceback
+import DispatchThread as DT
 
-Logger = Logger()
-DT     = None
-
-def H2R_SetDT(dt):
-    global DT
-    DT = dt
-
-ThreadLock = Lock()
+Logger        = Logger()
+ThreadLock    = Lock()
 GZIP_ENCODING = False
+
+import server
+
+initLogThread()
 
 HEADER_MODULE = {
             "getdata":{},
@@ -27,22 +27,6 @@ HEADER_MODULE = {
             "language":"",
             "cookie":{}
 }
-
-def JudgeH2(Conn):
-    "通过连接判断是否进行 HTTP2 的升级请求"
-    try:
-        Conn.do_handshake()
-    except Exception as e:
-        return
-    finally:
-        try:
-            if Conn.selected_alpn_protocol() == "h2":
-                return True
-            return False
-        except:
-            return False
-
-
 MagicContent = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 FrameTypes   = {
     '0' : 'Data',
@@ -64,8 +48,7 @@ SettingsFrameParam = {
     "5" : "SETTINGS_MAX_FRAME_SIZE",
     "6" : "SETTINGS_MAX_HEADER_LIST_SIZE",
 }
-class ServerResponseHTTP2:
-    """Type: 
+"""Type: 
             0x0 -> Data
             0x1 -> Headers
             0x2 -> Priority
@@ -75,33 +58,101 @@ class ServerResponseHTTP2:
             0x6 -> Ping
             0x7 -> GoAway
             0x8 -> Window_Update
-            0x9 -> Continuation"""
+            0x9 -> Continuatio
+n"""
+
+
+
+def JudgeH2(Conn):
+    "通过连接判断是否进行 HTTP2 的升级请求"
+    try:
+        Conn.do_handshake()
+    except Exception as e:
+        return
+    finally:
+        try:
+            if Conn.selected_alpn_protocol() == "h2":
+                return True
+            return False
+        except:
+            return False
         
+def setLogFrs(frames, self):
+    for frame in frames:
+        if isinstance(frame, str):
+            Logger.error("String type frame!:", frame)
+            continue
+        Logger.comp("-"*70)
+        Logger.comp(" [{0: <3}] Recv Frame: | TYPE: {1: <13} | LEN: {2: <7} | flags: {3}".format(
+            frame.getStreamID(),
+            frame.getType(),
+            frame.getLength(),
+            frame.getFlags()
+        ))
+        ctx = ''
+        adds = ''
+
+        if frame.getType() == 'Headers':
+            Logger.error(f"      View Path:", frame.get(":path"))
         
-    def __init__(self, respH1, ident):
+        if frame.getType() == 'Settings':
+            ctx = str(frame.get())
+
+        elif frame.getType() == 'Headers':
+            for i in frame.get():
+                ctx += str(i)+': '+str(frame.get().get(i))+'\n                              '
+            ctx = ctx[0:-len("'\n                              '")]
+
+        elif frame.getType() == 'Data':
+            ctx = str(frame.get())
+            adds = '\n               -->  window_size: '+str(self.conn.recData)
+
+        elif frame.getType() == 'Window_Update':
+            ctx = str(frame.get())
+
+        else:
+            ctx = str(frame)
+
+        ctx = ctx[0:50] if not frame.getType() in ("Headers", "Settings", "Rst_Stream") else ctx
+         
+        setLog(
+           f"""[{frame.getStreamID()}] RECV_{frame.getType().upper()}_FRAME
+               -->  stream_id: {frame.getStreamID()}
+               -->  flags: {frame.getFlags()}
+               -->  size: {frame.getLength()}{adds}
+               -->  content:
+                              {ctx}\n
+""", "./logs/h2.log", 0)
+
+class ServerResponseHTTP2:
+    def __init__(self, respH1:server.ServerResponse, ident):
         self.ident = str(ident)
         self.self = respH1
         self.settings = {
-            "SETTINGS_HEADER_TABLE_SIZE":     4096,
-            "SETTINGS_MAX_CONCURRENT_STREAMS": 100,
-            "SETTINGS_INITAL_WINDOW_SIZE":   65535,
-            "SETTINGS_MAX_FRAME_SIZE":       2**14,   #16384,
-            "SETTINGS_MAX_HEADER_LIST_SIZE": 16384,
+            "SETTINGS_HEADER_TABLE_SIZE":            4096,
+            "SETTINGS_MAX_CONCURRENT_STREAMS":        100,
+            "SETTINGS_INITAL_WINDOW_SIZE":          65535,
+            "SETTINGS_MAX_FRAME_SIZE":              2**14,   #16384,
+            "SETTINGS_MAX_HEADER_LIST_SIZE":        16384,
+            "client": {
+                "SETTINGS_INITAL_WINDOW_SIZE":      65535,
+            }
         }
-        self.initalWindowSize = 65535
+        for k in http2settings:
+            self.settings[k] = http2settings[k]
 
-        self.conn = socketProxy(self.self.conn, self)
+        self.conn = SocketRecorder(self.self.conn, self)
         self.encoder = None
         self.decoder = None
         self.needNewH1Response = False
         self.streams = {}
-        self.x  = 0
         self.uploadingStream = {}
         self.waitingPost     = {}
         self.streamCache     = {}
         self.priority        = 1
 
     def getSettings(self, key):
+        "Get settings by using key"
         if key == 'header_table_size':
             ret = self.settings.get(SettingsFrameParam['1'], None)
             return ret if ret else 65535
@@ -112,129 +163,107 @@ class ServerResponseHTTP2:
             return self.settings.get(key)
 
     def response(self):
+        "Handle the frames"
         MAGIC = self.conn.recv(24)
         if MAGIC == MagicContent:
             Logger.info("使用 http2 进行通讯")
-            C = 0
-            x = SettingFrame(self, self.conn, 0)
-            #x.send()
+            C      = 0        #计数器
+            self.sendSettings()
             while 1:
                 try:
-                    frs = ParsingHTTP2Frame(self.conn, self)
-                    if frs == 'stop':
+                    frame = ParsingHTTP2Frame(self.conn, self)       #解析HTTP2帧
+                    setLogFrs(frame, self)
+                    if frame == 'stop':
                         return
-                    if len(frs) == 0:
+                    if len(frame) == 0:
                         time.sleep(0.01)
                         continue
                     self.checkWindowSize()
-                    for fs in frs:
-                        #print("                   |SID         |Type     |    Length|     Flags|")
-                        Logger.error("->", C, "接受到帧：", "SID:", fs['SID'], "TYPE:", fs['type'], "LENGTH:", fs['length'], "FLAGS:", fs['flags'])
-
-                        ctx = ''
-                        if fs['type'] == 'Settings':
-                            ctx = str(fs['param'])
-                        elif fs['type'] == 'Headers':
-                            for i in fs['value']['header']:
-                                ctx += '                    '+str(i)+': '+str(fs['value']['header'][i])+'\n'
-                        elif fs['type'] == 'Data':
-                            ctx = str(fs['value'])
-                        elif fs['type'] == 'Window_Update':
-                            ctx = str(fs['window_update'])
-                            print("WindowUpdate---->", ctx)
-                        else:
-                            ctx = str(fs)
-                        setLog("["+str(fs['SID'])+"] RECV_"+fs['type'].upper()+"_FRAME\n               --> content:\n                     "+(ctx[0:20] if not fs['type'] in ('Headers', "Settings", "Rst_Stream") else ctx)+"\n               --> stream id: "+str(fs['SID'])+"\n               --> flags: "+str(fs['flags'])+"\n               --> size: "+str(fs['length']), "./logs/h2.log", 0)
-                        
-                    Thread(target=self.respond, args=(frs,)).start()
-                    #self.respond(frs)
-                    C+=1
+                    Thread(target=self.respond, args=(frame,)).start()
+                    C += 1
                 except Exception as e:
-                    import traceback
                     Logger.error(e, traceback.format_exc())
-                    if "WinError" in str(e):
-                        pass
                     continue
 
+    def sendSettings(self):
+        wu = SettingFrame(self, self.self.conn, 0)
+        wu.send()
+
     def checkWindowSize(self):
-        #Logger.warn("check update")
-        if self.initalWindowSize*3/4 <= self.conn.recData:
-            Logger.warn("超过Update的3/4")
-            x = WindowUpdateFrame(self.conn, 0, self)
-            x.send(65535*2)
+        #更新流量窗口
+        if self.settings['SETTINGS_INITAL_WINDOW_SIZE']*3/4 <= self.conn.recData:
+            mainstream = WindowUpdateFrame(self.conn, 0, self)
+            mainstream.send(65535)
             for i in self.uploadingStream.keys():
-                x = WindowUpdateFrame(self.conn, i, self)
-                x.send(65535*2)
-                Logger.error("向", i, "发送！", self.conn.recData)
+                wuframe = WindowUpdateFrame(self.conn, i, self)
+                wuframe.send(65535)
             self.conn.recData = 0
-            #Logger.comp(self.conn.recData, self.initalWindowSize)
         
-    def respond(self, frs):
-        for f in frs:
-            if f['type'] == "Settings":
-                for key in f['param']:
-                    self.settings[key] = f['param'][key]['valueTo']
+    def respond(self, frames):
+        for frame in frames:
+            if frame.getType() == "Settings":
+                for key in frame.get():
+                    value = frame.get().get(key).get("valueTo")
+                    if str(key).upper() == 'SETTINGS_INITAL_WINDOW_SIZE':
+                        self.settings['client'][key.upper()] = value
+                        Logger.warn("Client update inital window size:", value)
+                    else:
+                        if key == 0:
+                            continue
+                        self.settings[key] = value
+                self.respondSetting(frame)
+            if frame.getType() == "Headers":
+                self.respondHeader(frame)
+            if frame.getType() == "Ping":
+                self.respondPing(frame)
+            if frame.getType() == 'Rst_Stream':
+                self.stopStream(frame)
+            if frame.getType() == 'Data':
+                self.respondData(frame)
 
-                self.respondSetting(f)
-            
-            if f['type'] == "Headers":
-                #DT.addThread(Thread(target=self.respondHeader, args=(f,)), 4)
-                self.respondHeader(f)
+    def respondData(self, dataframe):
+        if not dataframe.getStreamID() in self.streamCache.keys():
+            #POST则使用内存存储信息，multipart/form-data则使用磁盘存储
+            self.streamCache[dataframe.getStreamID()] = cf.h2cachefile(save=
+                                                               (cf.MEMORY if self.streams.get(dataframe.getStreamID()) and self.streams.get(dataframe.getStreamID()).header and self.streams.get(dataframe.getStreamID()).frame.get('method').lower() == "post" and not decodeContentType(self.streams.get(dataframe.getStreamID()).header.get("content-type")).get("type").lower() == "multipart/form-data" else cf.DISK))
+        self.streamCache[dataframe.getStreamID()].write(dataframe.get())
 
-            if f['type'] == "Ping":
-                self.respondPing(f)
-            
-            if f['type'] == 'Rst_Stream':
-                self.stopStream(f)
-            
-            if f['type'] == 'Data':
-                self.respondData(f)
-
-    def respondData(self, f):
-        if not f['SID'] in self.streamCache.keys():
-            self.streamCache[f['SID']] = cf.h2cachefile(save=(cf.MEMORY if self.streams.get(f['SID']) and self.streams.get(f['SID']).header and self.streams.get(f['SID']).header['value']['header']['method'].lower() == "post" and not decodeContentType(self.streams.get(f['SID']).header['value']['header'].get("content-type")).get("type", "").lower() == "multipart/form-data" else cf.DISK))
-
-        self.streamCache[f['SID']].write(f['value'])
-        if f['flags'] & 0x1 == 0x1:
-            self.streamCache[f['SID']]._check()
-
-            if self.streams.get(f['SID']):
-                if self.streams.get(f['SID']).header:
-                    h = self.streams.get(f['SID']).header
-                    if h['value']['header']['method'].lower() == 'post' and not "multipart/form-data" in h['value']['header'].get("content-type", "").lower():
-                        #POST 数据
-                        self.streamCache[f['SID']].seek(0)
-                        postdata = decodePOST(self.streamCache[f['SID']].read().decode("UTF-8"))
-                        self.waitingPost[f['SID']] = postdata
-                    elif "multipart/form-data" in h['value']['header'].get("content-type", "").lower():
-                        #MULTIPART/FORM-DATA 数据
-                        bd = decodeContentType(h['value']['header'].get("content-type", ""))["boundary"]
-                        files, datas = parsingCacheFile(self.streamCache[f['SID']], bd)
-                        self.uploadingStream[f['SID']] = files, datas
-                        Logger.info(".....")
+        if dataframe.getFlags() & 0x1 == 0x1:
+            #结束文件传输标识
+            if self.streams.get(dataframe.getStreamID()) and self.streams.get(dataframe.getStreamID()).frame:
+                frame = self.streams.get(dataframe.getStreamID()).frame
+                if frame.get('method').lower() == 'post' and not "multipart/form-data" in frame.get("content-type", "").lower():
+                    #POST 数据
+                    self.streamCache[dataframe.getStreamID()].seek(0)
+                    postdata = decodePOST(self.streamCache[dataframe.getStreamID()].read().decode("UTF-8"))
+                    self.waitingPost[dataframe.getStreamID()] = postdata
+                elif "multipart/form-data" in frame.get("content-type", "").lower():
+                    #MULTIPART/FORM-DATA 数据
+                    bd           = decodeContentType(frame.get("content-type", ""))["boundary"]
+                    files, datas = parsingCacheFile(self.streamCache[dataframe.getStreamID()], bd)
+                    self.uploadingStream[dataframe.getStreamID()] = files, datas
+                    Logger.info(f"{dataframe.getStreamID()} 终止传输文件")
+            self.streamCache[dataframe.getStreamID()].clean()
 
     def stopStream(self, f):
-        if f['SID'] in self.streams.keys():
-            self.streams[f['SID']].isClosed = True
-            #del self.streams[f['SID']]
+        if f.getStreamID() in self.streams.keys():
+            self.streams[f.getStreamID()].isClosed = True
         
     def respondPing(self, f):
         try:
-            print("接受到Ping 帧-->", f)
-            x = PingFrame(self.conn, f["SID"], f, self)
-            x.send(1)
-            #self.goAway()
+            retFrame = PingFrame(self.conn, f.getStreamID(), f, self)
+            retFrame.send(1)
         except Exception as e:
-            print(e)
+            pass
 
     def uploadFile(self, f):
-        sid = f['SID']
+        sid = f.getStreamID()
         self.uploadingStream[sid] = {}
         while 1:
             if len(self.uploadingStream[sid]) > 0:
-                x = self.uploadingStream.get(f['SID'])
-                del self.uploadingStream[f['SID']]
-                return x
+                data = self.uploadingStream.get(f.getStreamID())
+                del self.uploadingStream[f.getStreamID()]
+                return data
             time.sleep(0.001)
 
     def getPostData(self, sid):
@@ -246,85 +275,86 @@ class ServerResponseHTTP2:
                 return self.waitingPost[sid]
             time.sleep(0.001)
 
-    def respondHeader(self, f):
+    def respondHeader(self, headerframe):
+        "Respond header frame and send data frame to client"
 
-        #print("即将发送 Header 与 Data 数据帧\n")
-        
-        path = f['value']['header'][':path']
+        #f['value']['stream_id'] = f['SID']
+        path                    = headerframe.get(":path")
+        header                  = HeaderFrame(self.conn, headerframe.getStreamID(), self)
 
-        header = HeaderFrame(self.conn, f['SID'], self)
-        #p.set("content-length", str(len(x.data)))
         header.set("content-type", FileType(path))
+        
+        obj = self.self.clearEnvironment(self.self.conn, self.self.collection, headerframe)
 
-        f['value']['stream_id'] = f['SID']
-
-        prettyPrint(f['value'])
-
-        #if self.needNewH1Response:
-            #self.needNewH1Response = False
-        obj = self.self.clearEnvironment(self.self.conn, self.self.collection)
-        #else:
-            #obj = self.self
+        #对新的响应对象提供数据环境
 
         obj.cachesize = self.getSettings("SETTINGS_MAX_FRAME_SIZE")
-        self.streams[f['SID']] = H1toH2SocketStream(self.conn, f['SID'], self)
-        self.streams[f['SID']].header = f
+        self.streams[headerframe.getStreamID()] = H1toH2SocketStream(self.conn, headerframe.getStreamID(), self)
+        self.streams[headerframe.getStreamID()].frame = headerframe
 
-        obj.conn   = self.streams[f['SID']]
+        obj.conn   = self.streams[headerframe.getStreamID()]
         obj.header = header
+        gloadd     = {}
 
-
-        f['value']['header'] = toH1Format(f['value']['header'])
+        headerframe.data.header = toH1Format(headerframe.get().get())
         
         obj.data = HEADER_MODULE.copy()
-        obj.data['cookie'] = {} if not f['value']['header'].get("cookie", None) else decodeCookie(f['value']['header'].get("cookie"))
-        obj.data['path'] = f['value']['header']['path']
-        obj.data['headers'] = f['value']['header']
-        obj.data['getdata'] = f['value']['getdata']
-
-        gloadd = {}
+        obj.data['cookie'] = {} if not headerframe.get("cookie") else decodeCookie(headerframe.get("cookie"))
+        obj.data['path'] = headerframe.get("path")
+        obj.data['headers'] = headerframe.get().get()
+        obj.data['getdata'] = headerframe.get("getdata")
 
         #上传文件进行处理
+
         dctx = decodeContentType(obj.data['headers'].get("content-type"))
         if dctx.get("type") == "multipart/form-data" and dctx.get("boundary", None):
-            file, data = self.uploadFile(f)
+            file, data = self.uploadFile(headerframe)
             gloadd["_FILE"], gloadd["_DATA"] = file, data
-            Logger.error("---》", file, data)
-        #Logger.comp(f['SID'], '-', dctx)
-        #Logger.comp(f['SID'], f['value']['header']['path'][-3:])
+            
+            p1, p2 = file, [(k, len(data[k])) for k in data]
+            Logger.error(f"[文件上传] FILE: {p1} | DATA: {p2} | SID: {headerframe.getStreamID()}")
 
-        if f['value']['header'].get("method").lower() == 'post' and not dctx.get("boundary", ""):
-            obj.data['postdata'] = self.getPostData(f['SID'])
+        #POST 请求处理
+        if headerframe.get("method").lower() == 'post' and not dctx.get("boundary", ""):
+            obj.data['postdata'] = self.getPostData(headerframe.getStreamID())
 
+
+        #普通文件请求处理
         obj.inHTTP2  = True
         obj.http2Res = self
+        
+        def closeFile():
+            print(gloadd.get("_FILE"))
+            for file in gloadd.get("_FILE", {}):
+                gloadd['_FILE'][file].cachefile.clean()
+            for data in gloadd.get("_DATA", {}):
+                if isinstance(gloadd['_DATA'][data], str):
+                    continue
+                gloadd['_DATA'][data].clean()
 
-        Logger.warn("Choosing Response Method")
-
-        if f['value']['header']['path'][-3:] == '.py':
-            Logger.warn("PythonFileHandle()")
-            obj.PythonFileHandle(obj.data, glo=gloadd,  onHeaderFinish=lambda: header.send(4), onEndCallback=lambda: self.streams[f['SID']].send(b'', 1))
+        if headerframe.get('path')[-3:] == '.py':
+            obj.PythonFileHandle(obj.data, glo=gloadd, onHeaderFinish=lambda: header.send(4), onEndCallback=closeFile)
             self.priority = obj.priority
         else:
-            Logger.warn("CommonFileHandle()")
-            obj.CommonFileHandle(obj.data,  onHeaderFinish=lambda: header.send(4), glo=gloadd)
+            obj.CommonFileHandle(obj.data, glo=gloadd, onHeaderFinish=lambda: header.send(4))
         
         self.needNewH1Response = True
 
     
-    def error(self, type_, exception='', detail='', conn=None):
+    def error(self, type_, frame, exception='', detail='', conn=None):
+        "处理服务器故障"
         header = HeaderFrame(self.conn, conn.sid, self)
-
+        conn   = conn if conn else self.conn
         if type_ == 'codeerror':
             header.set(":status", "500")
-            #self.conn.send(header.encode()+self.SingleLineFeed)
             header.send(4)
 
             conn.send(b"<html><head><meta charset='utf-8'></head><body><center><h1>Python Error</h1>")
             detail = detail.replace("<", "&lt;").replace(">", "&gt")
-            detail = tryGetErrorDetail(detail, ServerPath+"/"+conn.header['value']['header']['path'])
+            
+            detail = tryGetErrorDetail(detail, ServerPath+"/"+frame.get("path"))
             conn.send(b"<br><font color='red'>Error: </font>"+str(exception).encode()+b"(at line "+str(exception.__traceback__.tb_lineno).encode("UTF-8")+\
-                      b")<br></center><div style='margin:30px'>Detail:<br><div style='padding:30px;line-height: 2;'>"+detail.replace("\n", "<br>").encode()+\
+                      b")<br></center><div style='margin:30px'>Detail:<br><div style='padding:30px;line-height: 2;'>"+detail.replace("\n", "<br>").replace(" ", "&ensp;").encode()+\
                       b"</div></div></body></html>")
             conn.send(b'', 1)
             return
@@ -343,18 +373,14 @@ class ServerResponseHTTP2:
             conn.send(b'', 1)
 
 
-    def respondSetting(self, f):
-        if f['flags'] == 1:
-            #设置确认
-            #x = SettingFrame(self, self.conn, f['SID'])
-            #x.send(f['SID'], 1, 0)
+    def respondSetting(self, frame):
+        "更新HTTP2的Settings"
+        if frame.get(0) and frame.get(0).get("valueTo") == 0:
             return
-            #pass
-        elif f['param'].get(0, None) and f['param'].get(0, None).get("valueTo", None) == 0:
-            return
-        retFrame = SettingFrame(self, self.conn, f['SID'])
-        #self.settings['SETTINGS_MAX_FRAME_SIZE'] = 2**20
-        retFrame.send(f['SID'])
+        #for key in f.get():
+        #    self.settings[key] = f.get(key)['valueTo']
+        retFrame = SettingFrame(self, self.conn, 0)
+        retFrame.send(1)
     
     def goAway(self):
         try:
@@ -377,7 +403,6 @@ class ServerResponseHTTP2:
         else:
             return self.decoder
     def getNewHPackEncoder(self):
-        #if not self.encoder:
             from hpack import Encoder
             x = Encoder()
             x.header_table_size = self.getSettings("header_table_size") #65536
@@ -385,13 +410,12 @@ class ServerResponseHTTP2:
             x.max_allowed_table_size = self.getSettings("header_table_size") #65536
             self.encoder = x
             return x
-        #else:
-            #return self.encoder
 
 
 
-class socketProxy:
+class SocketRecorder:
     def __init__(self, conn, res):
+        "用于记录收发数据量\nconn: socket conn; res: ServerResponseHTTP2 object"
         self.conn = conn
         self.proData = 0
         self.recData = 0
@@ -406,36 +430,27 @@ class socketProxy:
         if len(data) == 0:
             return b''
         self.recData += len(data)
-        #setLog("["+self.self.ident+"] < "+str(data), "./logs/h2.log")
         return data
     def makefile(self, t):
         return self.conn.makefile(t)
     def send(self, data, retry=5):
-
-        def tsend():
-            if self.isClosed:
-                return
-            self.proData += len(data)
-            try:
-                #setLog("["+self.self.ident+"] > "+str(data), "./logs/h2.log")
-                #ThreadLock.acquire()
-                DT.ThreadLock.acquire()
-                self.conn.send(data)
-                DT.ThreadLock.release()
-            except Exception as e:
-                if 1:
-                    if retry == 0:
-                        print("retry fell.")
-                        Logger.error("关闭 socket:", e)
-                        self.isClosed = True
-                        self.self.goAway()
-                        self.conn.close()
-                        return
-                    print("Retry...", retry, e)
-                    self.send(data,  retry-1)
+        if self.isClosed:
+            return
+        self.proData += len(data)
+        try:
+            DT.ThreadLock.acquire()
+            self.conn.send(data)
+            DT.ThreadLock.release()
+        except Exception as e:
+            if 1:
+                if retry == 0:
+                    Logger.error("关闭 socket:", e)
+                    self.isClosed = True
+                    self.self.goAway()
+                    self.conn.close()
                     return
-
-        tsend()
+                self.send(data,  retry-1)
+                return
 
             
 class WindowUpdateFrame:
@@ -448,25 +463,25 @@ class WindowUpdateFrame:
         fh += int.to_bytes(8, 1, 'big')
         fh += int.to_bytes(0, 1, 'big')
         fh += parsingRSID(R, self.sid)
-        print("于", self.sid, "发送 Window Update 帧")
         data = parsingRSID(R, increment)
-        #print(data)
         self.conn.send(fh+data)
-        setLog("["+str(self.sid)+"] SEND_WINDOW_UPDATE_FRAME\n               --> increment: "+str(increment), "./logs/h2.log", 0)
+        setLog(f"""[{self.sid}] SEND_WINDOW_UPDATE_FRAME
+               --> increment: {increment}\n\n""", "./logs/h2.log", 0)
+
 
 class PingFrame:
     def __init__(self, conn, sid, frame, s):
         self.self = s
         self.conn = conn
-        self.data = frame['value']
+        self.data = frame.get()
         self.sid  = sid
     def send(self, flags = 1, R = 0):
         fh = int.to_bytes(8, 3, 'big')
         fh += int.to_bytes(6, 1, 'big')
         fh += int.to_bytes(flags, 1, 'big')
         fh += parsingRSID(R, self.sid)
-        print("于", self.sid, "发送 Ping 帧", fh)
         self.conn.send(fh+self.data)
+
 
 class SettingFrame:
     def __init__(self, res, conn, sid):
@@ -481,6 +496,8 @@ class SettingFrame:
             fc = b''
             if not flags == 1:
                 for i in self.self.settings:
+                    if isNum(i) == False:
+                        continue
                     fc += int.to_bytes(int(getFrameId(i)), 2, byteorder='big')
                     fc += int.to_bytes(self.self.settings[i], 4, byteorder='big')
             if not Ctx:
@@ -490,11 +507,17 @@ class SettingFrame:
             fh += int.to_bytes(flags, 1, byteorder='big')
             RSID = parsingRSID(R, self.sid)
             fh += RSID
-            print("于",self.sid,"发送Settings帧")
-            setLog("["+str(self.sid)+"] SEND_SETTINGS_FRAME\n               ---> settings' size: "+str(len(fc))+"\n               --> flag: "+str(flags)+"\n               --> Ctx: "+str(Ctx), "./logs/h2.log", 0)
+            setLog(f"""[{self.sid}] SEND_SETTINGS_FRAME
+               -->  settings' size: {len(fc)}
+               -->  flags: {flags}
+               -->  content:
+                              {fc}\n\n""", "./logs/h2.log", 0)
+            
             self.conn.send(fh+fc)
         except Exception as e:
-            print("无法发送Setting帧：", e)
+            Logger.error("无法发送Setting帧:", e)
+
+
 class DataFrame:
     def __init__(self, conn, data, sid, res, alreadyGzip=False):
         self.conn = conn
@@ -506,6 +529,8 @@ class DataFrame:
             if not self.self.streams.get(self.sid) or self.self.streams[self.sid].isClosed:
                 return
             frame = None
+
+            #判断数据大小和最大帧大小，并考虑分段发送数据
             if self.self.getSettings("SETTINGS_MAX_FRAME_SIZE") < len(self.data):
                 d = self.data
                 self.data = self.data[0:self.self.getSettings("SETTINGS_MAX_FRAME_SIZE")]
@@ -516,8 +541,6 @@ class DataFrame:
             self.fh += int(0).to_bytes(1, 'big')            #Type
             self.fh += int(flag).to_bytes(1, 'big')         #Flag
             self.fh += parsingRSID(r, self.sid)             #R and Stream ID
-
-            #print("于", self.sid, "发送DATA FRAME!!!", len(self.data), flag)
             
             self.conn.send(self.fh+self.data)
 
@@ -525,12 +548,20 @@ class DataFrame:
                 Logger.warn(self.sid, "无法完全发送，发送剩余部分：", len(d))
                 frame.send(flag, r)
 
-            setLog("["+str(self.sid)+"] SEND_DATA_FRAME\n               --> data size: "+str(len(self.data))+"\n               --> content:\n                    "+str(self.data)[0:20]+"\n               --> flag: "+str(flag)+"\n               --> stream id: "+str(self.sid), "./logs/h2.log", 0)       #LOG here--------------------------
+            setLog(f"""[{self.sid}] SEND_DATA_FRAME
+               -->  data size: {len(self.data)}
+               -->  flags: {flag}
+               -->  content:
+                              {self.data[0:20]} ...\n\n""", "./logs/h2.log", 0)
+            
         except Exception as e:
             import traceback
-            print("无法发送Data帧：", e, traceback.format_exc())
-            setLog("["+str(self.sid)+"] ERROR_IN_SENDING_DATA_FRAME\n               --> Error: "+str(e)+"\n               --> stream id"+str(self.sid), "./logs/h2.log", 0)
-            #self.self.streams[self.sid].isClosed = True
+            Logger.error("无法发送 Data 帧:", e, traceback.format_exc())
+            setLog(f"""[{self.sid}] ERROR IN SENDING_DATA_FRAME
+               -->  error: {e}
+               -->  details: {traceback.format_exc()}
+               -->  stream_id: {self.sid}\n\n""", "./logs/h2.log", 0)
+
 
 class HeaderFrame:
     def __init__(self, conn, streamId, res):
@@ -550,16 +581,16 @@ class HeaderFrame:
         else:
             if headerKey.lower() in ["connection"]:
                 return
-            #if headerKey.lower() == "etag":
-            #    return
             if self.headers.get(headerKey.lower()):
                 if dj:
                     self.headers[headerKey.lower()] += headerValue
                     return
             self.headers[headerKey.lower()] = headerValue
+
     def remove(self, headerKey):
         if headerKey in self.headers.keys():
             del self.headers[headerKey]
+
     def send(self, flag = 0, R = 0):
         try:
             if self.self.streams[self.sid].isClosed:
@@ -572,20 +603,31 @@ class HeaderFrame:
             fh += int.to_bytes(1, 1, 'big')       #Type
             fh += int.to_bytes(flag, 1, 'big')    #Flag
             fh += parsingRSID(R, self.sid)
-            print("于", self.sid, "发送 Header Frame!!!", len(h), self.headers)
-            #print(self.headers)
-            #print(fh, h, self.conn)
+
             headerCtx = ''
             for i in self.headers:
                 headerCtx += '                         '+str(i)+': '+str(self.headers[i])+'\n'
-            setLog("["+str(self.sid)+"] SEND_HEADER_FRAME\n               --> header size: "+str(len(h))+"\n               --> encoder settings: "+str(self.self.settings)+"\n               --> flags: "+str(flag)+"\n               --> Headers:\n"+headerCtx+"               --> stream id: "+str(self.sid), "./logs/h2.log", 0) #-------- log here
+
+            setLog(f"""[{self.sid}] SEND_HEADER_FRAME
+               -->  header size: {len(h)}
+               -->  encoder settings: {self.self.settings}
+               -->  flags: {flag}
+               -->  stream_id: {self.sid}
+               -->  headers:\n{headerCtx}\n\n""", './logs/h2.log', 0)
             self.conn.send(fh+h)
+
         except Exception as e:
-            print("无法发送Header帧：",e)
-            setLog("["+str(self.sid)+"] ERROR_IN_SENDING_HEADER_FRAME\n               --> Error: "+str(e)+"\n               --> stream id: "+str(self.sid), "./logs/h2.log", 0)
+
+            Logger.error("无法发送 Header 帧:", e)
+            setLog(f"""[{self.sid}] ERROR IN SENDING_HEADER_FRAME
+               -->  error: {e}
+               -->  stream_id: {self.sid}\n\n""", "./logs/h2.log", 0)
+
+
 
 class H1toH2SocketStream:
     def __init__(self, conn, sid, res, R = 0):
+        "用于将HTTP1.1的传输方式转为帧传输\nconn: socket conn; sid: stream id; res: ServerResponseHTTP2 object; R: data frame R"
         self.R = R
         self.conn = conn
         self.sid = sid
@@ -593,43 +635,45 @@ class H1toH2SocketStream:
         self.self = res
         self.isClosed = False
         self.header = None
+
     def send(self, data, flag=0):
         if self.isClosed:
             return
-        #print("发送Data帧: Flag:", flag,"DataRaw:", data[0:20], "SID:", self.sid)
-        #d = None
-        #Logger.info(len(data), self.self.getSettings("SETTINGS_MAX_FRAME_SIZE"))
-        #if len(data) >= self.self.getSettings("SETTINGS_MAX_FRAME_SIZE"):
-        #    d = data
-        #    data = d[0:self.self.getSettings("SETTINGS_MAX_FRAME_SIZE")]
-        #    d = d[self.self.getSettings("SETTINGS_MAX_FRAME_SIZE"):]
-        #ThreadLock.acquire()
         frame = DataFrame(self.conn, data, self.sid, self.self)
         frame.send(flag, self.R)
-        #ThreadLock.release()
-        #if d:
-        #    self.send(d, flag)
+
     def makefile(self, x):
         return self.conn.makefile(x)
+    
     def sendFrame(self, frameObj):
         if not self.isClosed:
             self.conn.send(frameObj.getContent())
 
+
+
 def parsingRSID(R, SID):
+    "将R标记和StreamID整理为一个4字节数据"
     RSID = getRangeBit(int.to_bytes(SID, 4, byteorder='big'), 0, 32, byteorder='big')
     RSID = int(str(R)+RSID[1:], 2).to_bytes(4, byteorder='big')
     return RSID
+
 def getFrameType(Id):
+    "通过ID获取帧类型"
     return FrameTypes[str(Id)] if int(Id) >= 0 and int(Id) < 10 else Id
+
 def getFrameId(Name):
+    "通过帧类型获取ID"
     for i in SettingsFrameParam:
         if SettingsFrameParam[i] == Name:
             return i
     return Name
+
 def getSFParam(Id):
+    "通过Setting帧的keyID获取设置的项"
     return SettingsFrameParam[str(Id)] if int(Id) > 0 and int(Id) < 7 else Id
 
 def ParsingHTTP2Frame(conn, self, frames=None):
+    "接收帧数据并转换为字典\nconn: socket conn; self: ServerResponseHTTP2 object;"
     if not isinstance(conn, bytes):
         try:
             cont = conn.recv(1024*1024)
@@ -637,102 +681,110 @@ def ParsingHTTP2Frame(conn, self, frames=None):
             return 'stop'
     else:
         cont = conn
-    i = 0
+
     frames = [] if not frames else frames
-    nF = {}
+    frame  = FrameParser()
+
     #帧头
     if cont == b'':
         return frames
 
-    print(cont)
+    frame.length = int.from_bytes(cont[0:3], 'big')
+    frame.type   = getFrameType(cont[3])
+    frame.typeID = cont[3]
+    frame.flags  = cont[4]
+    frame.R_SID  = cont[5:9]
+    frame.R      = getBit(frame.R_SID[0], 0, byteorder='big')
+    frame.SID    = int(getRangeBit(frame.R_SID, 1, 32, byteorder='big'), 2)
     
-    #print("FRAME_HEAD:",cont[0:9], cont)
-    nF['length'] = int.from_bytes(cont[0:3], 'big')
-    nF['type']   = getFrameType(cont[3])
-    nF['ID']     = cont[3]
-    nF["flags"] = cont[4]
-    nF['R_SID'] = cont[5:9]
-    nF['R'] = getBit(nF['R_SID'][0], 0, byteorder='big')
-    nF['SID'] = int(getRangeBit(nF['R_SID'], 1, 32, byteorder='big'), 2)
-    #print(nF)
-    
-
-    if nF["ID"] == 0:
-        #Data帧
-        nF["value"] = cont[9:nF['length']+9]
-    elif nF["ID"] == 1:
-        #Headers帧
-        nF["value"] = ParsingHeadersFrame(cont[9:nF['length']+9], nF, self)
-    elif nF['ID'] == 3:
-        #Rst_Stream帧
-        nF['value'] = cont[9:nF['length']+9]
-    elif nF['ID'] == 4:
-        #Settings帧
-        nF['param'] = ParsingSettingParam(cont[9:nF["length"]+9])
-    elif nF["ID"] == 6:
-        #Ping 帧
-        nF['value'] = cont[9:9+64]
-    elif nF['ID'] == 7:
-        #GoAway帧
+    ctx9 = cont[9:frame.length+9]
+    if frame.getID() == 0:   #Data帧
+        #frame["value"] = ctx9
+        frame.data = ctx9
+    elif frame.getID() == 1: #Headers帧
+        #frame["value"] = ParsingHeadersFrame(ctx9, frame, self)
+        frame.data = ParsingHeadersFrame(ctx9, frame, self)
+    elif frame.getID() == 3: #Rst_Stream帧
+        #frame['value'] = ctx9
+        frame.data = ctx9
+    elif frame.getID() == 4: #Settings帧
+        #frame['param'] = ParsingSettingParam(ctx9)
+        frame.data = ParsingSettingParam(ctx9)
+    elif frame.getID() == 6: #Ping 帧
+        #frame['value'] = cont[9:9+64]
+        frame.data = cont[9:9+64]
+    elif frame.getID() == 7: #GoAway帧
         self.goAway()
-        nF['value'] = cont[9:nF['length']+9]
-    elif nF["ID"] == 8:
-        #Window_Update帧
-        nF["window_update"] = ParsingWindowUpdateParam(cont[9:nF['length']+9])
-    cont = cont[nF['length']+9:]
+        #frame['value'] = ctx9
+        frame.data = ctx9
+    elif frame.getID() == 8: #Window_Update帧
+        #frame["window_update"] = ParsingWindowUpdateParam(ctx9)
+        frame.data = ParsingWindowUpdateParam(ctx9)
 
-    #print("-----------------------------------------------------------")
-    #if nF['ID'] == 1:
-    #    print("Header:", nF['value']['header'][':path'])
-    #print(nF['type'], nF['length'], nF['SID'])
-    #print("-----------------------------------------------------------")
+    nextframe = cont[frame.length+9:]
 
-    frames.append(nF)
+    frames.append(frame)
+
     if not cont == b'':
-        ParsingHTTP2Frame(cont, self, frames)
+        ParsingHTTP2Frame(nextframe, self, frames)
+
     return frames
 
 
 def ParsingWindowUpdateParam(ctx):
     return int.from_bytes(ctx, 'big')
 
-def ParsingHeadersFrame(ctx, fheader, self):
-    frame = {}
-    x = self.getNewHPackDecoder()
+def ParsingHeadersFrame(ctx, frame, self):
+    header  = HeaderParser()
+    decoder = self.getNewHPackDecoder()
+
     try:
-        if fheader['flags'] & 0x20 == 0x20:
-            #存在 PROIRITY帧
+        if frame.getFlags() & 0x20 == 0x20:
+            #存在 PRIORITY 标记
             c = 1
-            if fheader['flags'] & 0x8 == 0x8:
-                #存在 PADDED 帧
-                frame["pad-length"] = ctx[0]
+            if frame.getFlags() & 0x8 == 0x8:
+                #存在 PADDED 标记
+                header["pad-length"] = ctx[0]
                 c = 0
-            frame["E-SID"]      = str(ctx[1-c:5-c])
-            frame["weight"]     = ctx[5-c]
-            frame["header"]     = x.decode(ctx[6-c:])
 
-            frame['header']     = kvListToDict(frame['header'])
-
-            frame['header'][':path'], frame['getdata'] = decodeGET(frame['header'].get(":path", ""))
-
-            Path = frame['header'][':path']
+            '''header["E-SID"]      = str(ctx[1-c:5-c]) #E + StreamDependency
+            header["weight"]     = ctx[5-c]
+            header["header"]     = decoder.decode(ctx[6-c:])
+            header['header']     = kvListToDict(header['header'])
+            header['header'][':path'], header['getdata'] = decodeGET(header['header'].get(":path", ""))
+            Path = header['header'][':path']'''
+            header.isPriority = True
+            header.esdp       = str(ctx[1-c:5-c])
+            header.weight     = ctx[5-c]
             
-            if Path and Path[-1] == "/":
+            head = decoder.decode(ctx[6-c:])
+            head = kvListToDict(head)
+            head[':path'], head['getdata'] = decodeGET(head[':path'])
+
+            header.header = head
+            Path = header.getHeader(":path")
+
+        else:
+            #header['header'] = decoder.decode(ctx[0:])
+            #header['header'] = kvListToDict(header['header'])
+            #header['header'][':path'], header['getdata'] = decodeGET(header['header'].get(":path", ""))
+            #Path = header['header'][':path']
+            header.header = kvListToDict(decoder.decode(ctx[0:]))
+            header.header[':path'], header.header['getdata'] = decodeGET(header.getHeader(":path"))
+            Path = header.getHeader(":path")
+        
+        if Path and Path[-1] == "/":
                 realpath = ServerPath+"/"+Path
                 for i in config['default-page']:
                     if os.path.isfile(realpath + "/" + i):
-                        frame['header'][':path'] = Path+i
+                        header.header[':path'] = Path+i
                         break
 
-            #print("-------","于%s提取到的路径为:"%fheader['SID'],frame['header'][':path'], "-------", sep='\n')
-
-
-
     except Exception as e:
-        import traceback
         Logger.error(e, traceback.format_exc())
-        return frame
-    return frame
+        return header
+    
+    return header
 
 def ParsingSettingParam(ctx):
     params = {}
@@ -749,4 +801,5 @@ def ParsingSettingParam(ctx):
         params.update(ParsingSettingParam(ctx[6:]))
         return params
     return params
-    
+
+
