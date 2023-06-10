@@ -7,18 +7,29 @@ import time
 import io
 nx=0
 
+def randomGenerateFileName():
+    s = time.ctime()
+    g = time.asctime()
+    return str(hash(s))[0:8].replace("-", str(random.randint(0, 9)))+str(hash(g))[0:8]+str(random.randint(0, 99999))
+
+def returnRandomName(checkpath):
+    "checkpath: './test/%.temp'"
+    while 1:
+        s = randomGenerateFileName()
+        if os.path.isfile(checkpath.replace("%", s)):
+            continue
+        return s
+
 DISK = 0x1
 MEMORY = 0x4
-
-from Logger import Logger
-Logger = Logger("CacheF")
 
 class h2cachefile:
     def __init__(self, path="./temp", save=DISK):
         global nx
         self.saveType = save
         if save == DISK:
-            self.path = path+"/"+str(nx)+".temp"
+            s = returnRandomName(path+"/%.temp")
+            self.path = path+"/"+s+".temp"
             self.file = open(self.path, 'wb')
             self.file.close()
             self.file = open(self.path, 'wb+')
@@ -30,14 +41,15 @@ class h2cachefile:
         self.uploadFinish = False
         self.moveTo = []
     def _check(self):
+        "将文件移动到moveTo列表元素的路径处"
         for i in self.moveTo:
             try:
                 self.file.seek(0)
                 with open(i, 'wb') as f:
                     f.write(self.file.read())
             except Exception as e:
-                Logger.error("Move file error:", e)
-        
+                print("Move file error:", e)
+
     def write(self, ctx):
         assert type(ctx) == bytes, "Must be a bytes type like."
         #assert self.uploadFinish, "File is still uploading."
@@ -56,8 +68,12 @@ class h2cachefile:
             self.file.close()
             self.file = open(self.path, 'ab+')
     def clean(self):
-        self.file.close()
-        os.remove(self.path) if self.saveType == DISK else None
+        if os.path.isfile(self.path):
+            try:
+                self.file.close()
+            except:
+                pass
+            os.remove(self.path) if self.saveType == DISK else None
     def seek(self, seek, offset=0):
         self.file.seek(seek, offset)
     def readline(self):
@@ -69,14 +85,14 @@ class h2cachefile:
 class cachefile:
     def __init__(self, path='./temp'):
         global nx
-        n = nx
-        self.file = open(path+"/"+str(n)+".temp",'wb')
+        rdname = returnRandomName(path+"/%.temp")
+        self.path = path+"/"+rdname+".temp"
+        self.originPath = self.path
+        self.file = open(self.path,'wb')
         self.file.close()
-        self.file = open(path+"/"+str(n)+".temp",'wb+')
-
+        self.file = open(self.path,'wb+')
         self.writelen = 0
-        self.path = path+"/"+str(nx)+".temp"
-
+        
         nx+=1
     def write(self, ctx):
         assert type(ctx) == bytes, "Must be a bytes type like."
@@ -93,11 +109,16 @@ class cachefile:
     def save(self):
         self.file.close()
         self.file = open(self.path, 'ab+')
-    def clean(self):
+    def close(self):
         self.file.close()
-        os.remove(self.path)
+    def clean(self):
+        if os.path.isfile(self.originPath):
+            try:
+                self.file.close()
+            except:
+                pass
+            os.remove(self.originPath)
     def seek(self, x, offset=0):
-        #assert not x<0, "x must be > 0"
         self.file.seek(x, offset)
     def readline(self):
         return self.file.readline()
@@ -108,11 +129,9 @@ class cachefile:
             while not r==b'':
                 f.write(r)
                 r = self.read(1024*4)
-        self.file.close()
-        os.remove(self.path)
+        self.clean()
         self.file = open(path, 'ab+')
         self.path = path
-            
     def delete(self, length):
         """delete length(end)"""
         upseek = self.file.tell()
@@ -135,3 +154,5 @@ class cachefile:
             self.file.seek(upseek)
         except:
             pass
+
+
