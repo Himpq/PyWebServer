@@ -21,7 +21,6 @@ import ssl
 import re
 import traceback
 import H2Response as h2r
-import pluginManager as pm
 
 setDT(DT)
 
