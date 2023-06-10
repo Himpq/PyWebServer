@@ -1,3 +1,4 @@
+import socket
 import urllib.parse as uparse
 import CacheModule as cache
 
@@ -9,16 +10,13 @@ import os
 import threading
 from functions import *
 import ssl as sslm
+import typing
 
 Logger = Logger()
 abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 ott = '1234567890'
 ope = '-=.'
 quot = (b'"', b"'", "'", '"')
-PluginManager = None
-
-def ParsingHTTPData_SetPluginManager(PluginManager):
-    globals()['PluginManager'] = PluginManager
 
 def toInt(integer):
     "将Accept-Language中的q值转换为具体数字"
@@ -29,13 +27,12 @@ def toInt(integer):
         return 0
 
 @profile
-def parsingUpdateFile(connf, bd, conn, data):
-    """该函数用于解析正在上传的文件(通过HTTPSOCKET连接)。
-    connf: Connecting socket(makefile); bd=boundary; conn: Connecting socket"""
+def parsingUpdateFile(connf:socket.socket, boundary:str, conn:socket.socket, data:str):
+    """该函数用于解析正在上传的文件(通过HTTPSOCKET连接)。"""
 
     caf = cache.cachefile()
 
-    while not caf.endswith(b"--"+bd.encode()+b"--\r\n"):
+    while not caf.endswith(b"--"+boundary.encode()+b"--\r\n"):
         d = connf.readline()
         if d == b'':
             break
@@ -43,21 +40,20 @@ def parsingUpdateFile(connf, bd, conn, data):
     
     #connf.close()
 
-    data = parsingCacheFile(caf, bd)
+    data = parsingCacheFile(caf, boundary)
     return data
 
 @profile
-def parsingCacheFile(file, bd):
-    """该函数用于解析已被储存到本地的用户上传文件。
-    file: Cache uploaded files; bd=boundary: HTTP Uploaded Boundary"""
-
+def parsingCacheFile(file:typing.Union[cm.cachefile, cm.h2cachefile], boundary:str):
+    """该函数用于解析已被储存到本地的用户上传文件。"""
+    
     file.save()
     file.seek(0)
 
     files = {}
     datas = {}
 
-    bd = b"--"+bd.encode()
+    boundary = b"--"+boundary.encode()
     stop = False
     while not stop:
         content = file.readline()
@@ -65,11 +61,10 @@ def parsingCacheFile(file, bd):
         if content == b'':
             break
         
-        if content == bd+b"--\r\n":
+        if content == boundary+b"--\r\n":
             break
-        if content == bd+b'\r\n':
-            
-
+        
+        if content == boundary+b'\r\n':
             while 1:
                 ctx = file.readline().strip()
                 if ctx == b'\r\n' or ctx == b'': #无信息/读取完毕自动停止解析
@@ -104,11 +99,11 @@ def parsingCacheFile(file, bd):
                 #读取本地文件在 Boundary 之前的部分以此保存文件
                 while True:
                     line = file.readline()
-                    if line[len(line)-len(bd)-2:] == bd+b'\r\n':
-                        file.seek(-len(bd)-2, 1)
+                    if line[len(line)-len(boundary)-2:] == boundary+b'\r\n':
+                        file.seek(-len(boundary)-2, 1)
                         break
-                    elif line[len(line)-len(bd)-4:] == bd+b'--\r\n':
-                        file.seek(-len(bd)-4, 1)
+                    elif line[len(line)-len(boundary)-4:] == boundary+b'--\r\n':
+                        file.seek(-len(boundary)-4, 1)
                         stop = True
                         break
                     
@@ -119,11 +114,11 @@ def parsingCacheFile(file, bd):
                     #读取本地文件在 Boundary 之前的部分以此解析表单内容
                     line = file.readline()
 
-                    if line[len(line)-len(bd)-2:] == bd+b'\r\n':
-                        file.seek(-len(bd)-2, 1)
+                    if line[len(line)-len(boundary)-2:] == boundary+b'\r\n':
+                        file.seek(-len(boundary)-2, 1)
                         break
-                    elif line[len(line)-len(bd)-4:] == bd+b'--\r\n':
-                        file.seek(-len(bd)-4, 1)
+                    elif line[len(line)-len(boundary)-4:] == boundary+b'--\r\n':
+                        file.seek(-len(boundary)-4, 1)
                         stop = True
                         break
                     elif line == b'':
@@ -131,8 +126,11 @@ def parsingCacheFile(file, bd):
                     ctx += line
                     
                 datas[header.get('content-disposition')['name']] = ctx.strip().decode()
-
-    return files, datas
+    
+    cfiles = {}
+    for i in files:
+        cfiles[i] = UploadFileObject(files[i]['filename'], files[i]['cachefile'])
+    return UploadFilesObject(cfiles), UploadDatasObject(datas)
 
 HEADER_MODULE = {
             "getdata":{},
@@ -146,11 +144,12 @@ HEADER_MODULE = {
 
 @profile
 def parsingHeaderByString(content, noMethod=False):
+    """从字符串解析Header信息"""
     headers = HEADER_MODULE.copy()
     for line in content.split("\r\n"):
-        print("line", line)
+        #print("line", line)
         parsedLine = parsingHeaderLine(line, noMethod)
-        print(parsedLine)
+        #print(parsedLine)
 
         if len(parsedLine) == 3:
             if parsedLine[0][0] == "path":
@@ -162,7 +161,8 @@ def parsingHeaderByString(content, noMethod=False):
     return headers
 
 @profile
-def parsingHeader(connf, conn):
+def parsingHeader(connf:socket.SocketIO, conn:socket.socket):
+    """从socket链接解析Header信息"""
     content = b''
     headers = HEADER_MODULE.copy()
 
@@ -307,63 +307,44 @@ def decodeCookie(ctx):
     return kv
 
 @profile
-def parsingHeaderLine(i, noMethod=False):
+def parsingHeaderLine(line, noMethod=False):
     "用于解析一行HTTP Header。 i: string(http header), noMethod: bool(因wrap_socket丢失的GET/POST信息)"
-    if i == '':
+    if line == '':
         return ['', '']
-    x = i.split(":")
+    x = line.split(":")
     
-    if i[0:3].upper() == 'GET' or i[0:4].upper() == 'POST':
-        method = "GET" if i[0:3].upper() == 'GET' else "POST"
+    if line[0:3].upper() == 'GET' or line[0:4].upper() == 'POST':
+        method = "GET" if line[0:3].upper() == 'GET' else "POST"
 
-        o = i.split(' ')
+        o = line.split(' ')
         return ["path", uparse.unquote(o[1])],['method', method],1
-
-        '''
-    elif i[0:9].upper() == 'USER-AGENT':
-        agent = ':'.join(i.split(':')[1:]).strip()
-        return ['user-agent', agent]
-    elif i[0:5].upper() == 'RANGE':
-        rangeee = ':'.join(i.split(':')[1:]).strip()
-        return ['range', rangeee]
-    elif i[0:4].upper() == 'HOST':
-        host = ':'.join(i.split(":")[1:]).strip()
-        return ['host', host]
-    elif i[0:10].upper() == 'CONNECTION':
-        conn = ':'.join(i.split(":")[1:]).strip()
-        return ['connection', conn]
-    elif i[0:14].upper() == 'CONTENT-LENGTH':
-        return ['content-length', int(i.split(":")[1].strip())]'''
     
-    #elif i[0:15].upper() == 'ACCEPT-LANGUAGE':
-    #    lang = ':'.join(i.split(":")[1:]).strip()
-    #    qz = FZ(QZ(lang))
-    #    return ['language', qz]
-    elif i[0:6].upper() == 'COOKIE':
-        cookies = ':'.join(i.split(":")[1:]).strip()
+    elif line[0:6].upper() == 'COOKIE':
+        cookies = ':'.join(line.split(":")[1:]).strip()
         cookies = cookies.split(";")
         kv = {}
             
-        for i in cookies:
-                if '=' in i:
-                    g = i.split("=")
+        for line in cookies:
+                if '=' in line:
+                    g = line.split("=")
                     key = g[0].strip()
                     val = '='.join(g[1:])
                     kv[key] = val
         return ['cookie', kv]
-    elif i[0:12].upper() == 'CONTENT-TYPE':
-        val = ':'.join(i.split(":")[1:])
+    
+    elif line[0:12].upper() == 'CONTENT-TYPE':
+        val = ':'.join(line.split(":")[1:])
         if '=' in val:
             x = val.split("=")
             return [['content-type',x[0].replace("boundary","").replace(";","").strip()], ['boundary', x[1].strip()],1]
         return 'content-type', val.strip()
     else:
-        if ":" in i:
-            return [i.split(":")[0].strip().lower(),':'.join(i.split(":")[1:]).strip()]
+        if ":" in line:
+            return [line.split(":")[0].strip().lower(),':'.join(line.split(":")[1:]).strip()]
         else:
             if noMethod:
-                if " " in i and "HTTP/1.1" in i:
-                    ret = i.split(' ')
+                if " " in line and "HTTP/1.1" in line:
+                    ret = line.split(' ')
                     path = ret[ret.index("HTTP/1.1")-1]
                     return ['path', uparse.unquote(path)], ['method', None], 1
             return ['', '']
