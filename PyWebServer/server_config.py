@@ -35,6 +35,7 @@ maxsize-for-etag = (1024*1024*100)
 enable-plugin=true
 support-protocols=(["spdy/3.1", "http/1.1"])
 encoding=(['gzip', 'identity'])
+threadpool-maxsize=100
 
 [black_list]
 blacklist=
