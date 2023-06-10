@@ -22,49 +22,63 @@ FOREGROUND_RED = 0x0c # 红色
 FOREGROUND_PINK = 0x0d # 粉红色
 FOREGROUND_YELLOW = 0x0e # 黄色
 FOREGROUND_WHITE = 0x0f # 白色
- 
 
+showColor = 1
+
+from functions import setLog
 
 def warn(*arg, **args):
     times = datetime.datetime.now()
     times = times.strftime("%X")
-    print("[Server] [%s] [Warnning]>>" % times,*arg, **args, file=sys.stderr)
+    print("[Server] [%s] [Warning]>>" % times,*arg, **args, file=sys.stderr)
 
-import platform
+import platform, threading
+lock = threading.Lock()
+
 if platform.system() == "Windows":
     sohandle = ctypes.windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
     class Logger:
+        def __init__(self, s="Server"):
+            self.s = s
         def set_color(self, color, handle=sohandle):
             self.bool = ctypes.windll.kernel32.SetConsoleTextAttribute(handle, color)
 
         def cprint(self, mess, color, **arg):
-            self.set_color(color)
-            print(mess, **arg)
-            self.reset()
+            if showColor:
+                self.set_color(color)
+                print(mess, **arg)
+                self.reset()
+            else:
+                print(mess, **arg)
             
         def reset(self):
             self.set_color(FOREGROUND_DARKWHITE)
 
         def cpri(self,*arg, sep=' ', end='', type, color):
+            lock.acquire()
             timenow = datetime.datetime.now().strftime("%X")
-            x = ''
+            ctx = ''
             for i in arg:
-                x += str(i)+sep
-            x = x[0:len(x)-len(sep)]+end
-            self.cprint("[Server] [%s] [%s] >> %s"%(timenow, type, x), color, end='')
+                ctx += str(i)+sep
+            ctx   = ctx[0:len(ctx)-len(sep)]+end
+            msg = "[%s] [%s] [%s] >> %s"%(self.s, timenow, type, ctx)
+            self.cprint(msg, color, end='')
+            #print(msg, color, end='', file=f)
+            setLog(msg, "./logs/logger.log", 0)
+            lock.release()
 
         def warn(self, *arg, sep=' ', end='\n'):
-            self.cpri(*arg, sep=sep, end=end, type="Warnning", color=FOREGROUND_YELLOW)
+            self.cpri(*arg, sep=sep, end=end, type="Warning ", color=FOREGROUND_YELLOW)
         def error(self, *arg, sep=' ', end='\n'):
-            self.cpri(*arg, sep=sep, end=end, type="Error", color=FOREGROUND_RED)
+            self.cpri(*arg, sep=sep, end=end, type="Error   ", color=FOREGROUND_RED)
         def info(self, *arg, sep=' ',  end='\n'):
-            self.cpri(*arg, sep=sep, end=end, type="Info", color=FOREGROUND_SKYBLUE)
+            self.cpri(*arg, sep=sep, end=end, type="Info    ", color=FOREGROUND_SKYBLUE)
         def comp(self, *arg, sep=' ', end='\n'):
             self.cpri(*arg, sep=sep, end=end, type="Complete", color=FOREGROUND_GREEN)
 else:
     class Logger:
         def warn(self, *arg, sep=' ', end='\n'):
-            self.cpri(*arg, sep=sep, end=end, type="Warnning", color=FOREGROUND_YELLOW)
+            self.cpri(*arg, sep=sep, end=end, type="Warning ", color=FOREGROUND_YELLOW)
         def error(self, *arg, sep=' ', end='\n'):
             self.cpri(*arg, sep=sep, end=end, type="Error", color=FOREGROUND_RED)
         def info(self, *arg, sep=' ',  end='\n'):
