@@ -11,6 +11,7 @@ from ParsingHTTPData import *
 from stringParser import *
 from functions import *
 from Collection import *
+import DispatchThread as DT
 import socket
 import time
 import sys
@@ -22,8 +23,7 @@ import traceback
 import H2Response as h2r
 import pluginManager as pm
 
-ParsingHTTPData_SetPluginManager(pm)
-Functions_SetPluginManager(pm)
+setDT(DT)
 
 sys.path.append("./Plugins")
 
@@ -35,27 +35,12 @@ Coll = Collection()
 
 if not os.path.isdir("logs"):
     os.mkdir("logs")
-    open("logs/log.txt", 'w').close()
+    open("./logs/log.txt", 'w').close()
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
 SERVER = "PWS"
-VERSION = "/4.9"
-
-class CheatingSocket(socket.socket):
-    def __init__(self, *arg, **args):
-        self.retCtx = None
-        super().__init__(*arg, **args)
-        
-    def setRetCtx(self, retCtx):
-        self.retCtx = retCtx
-    def recv(self, *arg, **args):
-        if self.retCtx:
-            ret = self.retCtx
-            self.retCtx = None
-            return ret
-        return super().recv(*arg, **args)
-
+VERSION = "/6.1"
 
 #服务器
 
@@ -92,6 +77,7 @@ class Server:
                 obj  = ServerResponse(addr, ident, self)
                 user = Thread(target=obj.response, args=(conn, self.coll))
                 user.start()
+                #DT.addThread(user)
                 Logger.info("接收来自", addr, "的请求 | ID:", ident)  #, "线程状态:", user)
                 #print("Recv from",addr, "| Ident:", ident)
                 #self.tpool[ident] = [user, obj]
@@ -134,7 +120,7 @@ class Server:
 
 class ServerResponse:
     # HTTP/1.1 的响应
-    def __init__(self, ip, ident, server=None):
+    def __init__(self, ip, ident, server):
         
         self.server = server
         self.ident = ident  #没啥用
@@ -149,17 +135,21 @@ class ServerResponse:
         self.http2Res = None
         self.finish = False
         self.enableGzip = False
+        self.priority = 1
+        self.frame = None   #HTTP2 Feature
+
+    def getFrame(self) -> h2r.FrameParser:
+        return self.frame if self.frame else {}
     
-    def clearEnvironment(self, conn, coll, isSelf=False):
+    def clearEnvironment(self, conn, coll, frame, isSelf=False):
         if isSelf:
             newObj = self
             newObj.conn = conn #
             newObj.connfile = conn.makefile('rb') #
         else:
-            newObj = ServerResponse(self.ip, self.ident)
+            newObj = ServerResponse(self.ip, self.ident, self.server)
         newObj.collection = coll
-        #newObj.conn = conn
-        #newObj.connfile = conn.makefile('rb')
+        newObj.frame  = frame
         newObj.cache2 = FileCache()
         newObj.header = Header()
         newObj.finish = False
@@ -169,9 +159,9 @@ class ServerResponse:
         return newObj
 
     def response(self, conn, coll, already_keep_alive=0):
-        if self.server.ssl and not self.inHTTP2:
+        if not self.server == None and self.server.ssl and not self.inHTTP2 and not isinstance(conn, ssl.SSLSocket):# and not isinstance(conn, ssl.SSLSocket):
+            #进行 SSL 判断
             dup = conn.dup()
-
             try:
                 useHTTPS = True
                 sslconn = self.server.ssl_context.wrap_socket(conn, server_side=True, do_handshake_on_connect=config['ssl-doshakehand'])
@@ -187,7 +177,7 @@ class ServerResponse:
                     except:
                         return
                     header = parsingHeaderByString(ctx, noMethod=True)
-                    dup.send(b'HTTP/1.1 302 Do this!\r\nlocation:https://'+((str(setting['ssljump-domain']).encode()+b':'+str(self.server.port).encode()) if not header.get("host") else header.get("host").encode())+(b'/' if not header.get("path") else b'/'+header.get('path').encode())+b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
+                    dup.send(b'HTTP/1.1 302 Do this!\r\nlocation:https://'+((str(setting['ssljump-domain']).encode()+b':'+str(self.server.port).encode()) if not header.get("headers").get('host') else header['headers'].get("host").encode())+(b'/' if not header.get("path") else b'/'+header.get('path').encode())+b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
                     dup.close()
                     return
                 else:
@@ -197,18 +187,18 @@ class ServerResponse:
                 if useHTTPS:
                     conn = sslconn
 
-        self.clearEnvironment(conn, coll, True)
+        #self.clearEnvironment(conn, coll, self.frame, True)
+        self.conn       = conn
+        self.collection = coll
 
         Logger.comp("[长连接] 响应:", self.ip) if already_keep_alive else Logger.comp("响应IP: ", self.ip)
 
         #判断是否是 HTTP2 连接，如果是就交由H2R模块进行处理
         if h2r.JudgeH2(self.conn):
-            Logger.info(self.conn.selected_alpn_protocol())
+            #Logger.info(self.conn.selected_alpn_protocol())
             h2r.ServerResponseHTTP2(self, self.ident).response()
             self.inHTTP2 = True
             return
-        #else:
-        #    Logger.info(self.conn.selected_alpn_protocol())
 
         time1 = time.time()
         self.status = 'in response func.'
@@ -239,9 +229,8 @@ class ServerResponse:
         if self.data['headers'].get("host") == None or self.data.get("path") == None:
             return
 
-        Logger.warn(self.data)
-        Logger.warn(self.ysdata)
-
+        #Logger.warn(self.data)
+        #Logger.warn(self.ysdata)
         Logger.info("请求路径: ", self.data['headers']['host'] + self.data['path'])
 
         setLog("IP:"+str(self.ip)+"|Path:"+self.data['headers']['host'] + self.data['path'])
@@ -261,6 +250,7 @@ class ServerResponse:
             self.header.set("connection", "close")
         
         #判断是否是表单信息
+        ThreadLock.acquire()
         if self.data['headers'].get("content-type", None) == 'multipart/form-data':
             self.uploadFile(self.data)
         else:
@@ -287,7 +277,7 @@ class ServerResponse:
                 import traceback
                 Logger.error(e, "(at line", e.__traceback__.tb_lineno,")")
                 Logger.error(traceback.format_exc())
-
+        ThreadLock.release()
         time2 = time.time()
 
         Logger.comp("响应结束。响应时间: %ss"%(time2-time1))
@@ -296,7 +286,7 @@ class ServerResponse:
         try:
                 if (self.data['headers'].get("connection") == 'keep-alive' or already_keep_alive) and not self.PythonFileCloseConnect:
                     if not already_keep_alive >= int(config['keep-alive-max']):
-                        res = ServerResponse(self.ip, self.ident)
+                        res = ServerResponse(self.ip, self.ident, self.server)
                         thr = Thread(target=res.response, args=(self.conn, self.collection, already_keep_alive+1))
                         thr.start()
                     else:
@@ -324,20 +314,21 @@ class ServerResponse:
         self.header.set(0, "HTTP/1.1 "+str(code)+" "+content)
     def set_html(self, *val, **arg):
         val = list(val)
-        for i in range(len(val)):
-            if(isinstance(val[i], str)):
-                val[i] = ParseString(val[i], self.var)
+        #for i in range(len(val)):
+        #    if(isinstance(val[i], str)):
+        #        val[i] = ParseString(val[i], self.var)
         print(*val, **arg, file=self.cache2)
     def finish_send(self, onEC):
         onEC() if onEC else None
-    def getGlobal(self, onHF, onEC):
+    def getGlobal(self, onHF=None, onEC=None):
         globals_var = {}
         globals_var['set_cookie']       = self.set_cookie
         globals_var["set_header"]       = self.header.set
         globals_var['finish_header']    = lambda: self.finish_header(onHF)
         globals_var['finish_send']      = lambda: self.finish_send(onEC)
         globals_var['set_statuscode']   = self.set_statuscode
-        globals_var["print"]            = lambda *arg, **args: self.FinishReturn(*arg, **args)
+        globals_var['set_priority']     = self.setPriority
+        globals_var["print"]            = lambda *arg, **args: self.printToSocketOrCache(*arg, **args)
         globals_var['isHTTP2']          = self.inHTTP2
         globals_var['include']          = lambda path: self.include(path)
         globals_var['set_disable_etag'] = self.setDisableETag
@@ -354,7 +345,6 @@ class ServerResponse:
 
         return globals_var
 
-    @profile
     def uploadFile(self, data):
         self.status = 'in uploadFile func.'
         if data['headers'].get("boundary"):
@@ -370,32 +360,25 @@ class ServerResponse:
             self.CommonFileHandle(data, glo={"_FILE":x[0], "_DATA":x[1]})
         return
 
-    @profile
+
+    @priorityHigh
     def PythonFileHandle(self, data, glo={}, onHeaderFinish=None, onEndCallback=None):
         conn = self.conn
-        if not self.inHTTP2:
-            #conn.psend = conn.send
-            #setattr(conn, "psend", conn.send)
-            def s(b):
-                nonlocal conn
-                try:
-                    conn.psend(b)
-                except Exception as e:
-                    Logger.error(e)
-            #conn.send = s
-        header = self.header
-        #ThreadLock.acquire()
-        self.status = 'in PythonFileHandle func.'
+
+        self.priority = 0.2
+        header        = self.header
+        self.status   = 'in PythonFileHandle func.'
 
         if config['python'] == False:
             #判断配置文件是否禁用了 Python web功能
             return
 
-        if not self.inHTTP2:
+        if self.PythonFileCloseConnect: #not self.inHTTP2:
             self.header.remove("connection")
             self.header.remove("keep-alive")
             self.header.set("connection", "close")
             self.PythonFileCloseConnect = True
+
         if os.path.isfile(ServerPath+"/"+data['path']):
             realpath = ServerPath+"/"+data['path']
             with open(realpath, 'rb') as f:
@@ -426,13 +409,12 @@ class ServerResponse:
                 codeCompile = compile(PythonFileCode, '', 'exec')
                 exec(codeCompile, self.var)
 
-                #onEndCallback() if onEndCallback else 1
+                onEndCallback() if onEndCallback else None
                 Logger.error("CODE FINISH")
 
                 del globals_var, PythonFileCode
             except Exception as e:
                 self.err("codeerror", e, traceback.format_exc())
-                #ThreadLock.release()
                 return
 
             if not self.finish:
@@ -456,13 +438,12 @@ class ServerResponse:
 
                 datas = b''
                 if not self.inHTTP2:
+                    header.set("content-length", len(pythonPrintContent))
                     datas = header.encode()+self.SingleLineFeed
-                    #conn.send(header.encode()+self.SingleLineFeed)
-                    pass
                 else:
                     onHeaderFinish() if onHeaderFinish else 1
                 datas += (pythonPrintContent if not Mode304 else b"")+self.LineFeed
-                Logger.warn(len(datas), self.cachesize, len(datas)>=self.cachesize)
+
                 if len(datas) >= self.cachesize:
                     sendTimes = len(datas) // self.cachesize
                     endSize   = len(datas) - sendTimes * self.cachesize
@@ -480,12 +461,10 @@ class ServerResponse:
                     conn.send(b'', 1)
         else:
             self.err("404")
-        #ThreadLock.release()
 
-    @profile
+
     def PyInHtmlHandle(self, data, glo={}, onHeaderFinish=None):
-        #self.CommonFileHandle(data, onHeaderFinish=onHeaderFinish, retToPy=False)
-        #return
+        self.priority = 0.2
         realpath = ServerPath+"/"+data['path']
 
         if os.path.isfile(realpath):
@@ -496,7 +475,7 @@ class ServerResponse:
                 self.CommonFileHandle(data, onHeaderFinish, False)
                 return
 
-            if not self.inHTTP2:
+            if self.PythonFileCloseConnect: #not self.inHTTP2:
                 self.header.remove("connection")
                 self.header.remove("keep-alive")
                 self.header.set("connection", "close")
@@ -506,8 +485,10 @@ class ServerResponse:
             pycodes = re.findall(M, content, flags=re.S)
 
             env = self.getGlobal(onHeaderFinish, None)
-            del env['print']
-            del env['finish_header']
+            self.var = env
+
+            del self.var['print']
+            del self.var['finish_header']
 
             ctxs = {}
             ID   = 0
@@ -522,8 +503,8 @@ class ServerResponse:
                     return
                 ctxs[ID] = p
 
-            env['print'] = p
-            env = dict_inone(env, glo)
+            self.var['print'] = p
+            self.var = dict_inone(self.var, glo)
 
             self.header.set("content-type", "text/html")
 
@@ -533,7 +514,7 @@ class ServerResponse:
                 c   = code[1]
                 if len(c.split("\n")) == 1: #单行代码
                     c = c.lstrip()
-                exec(c, env)
+                exec(c, self.var)
                 content = content.replace(code[0]+code[1]+code[2], ctxs.get(ID, ""), 1)
 
                 ID += 1
@@ -548,11 +529,9 @@ class ServerResponse:
                 self.conn.send(self.LineFeed, 1)
 
 
-    @profile
     def CommonFileHandle(self, data,  onHeaderFinish=None, retToPy=True, glo={}):
         header = self.header
         conn = self.conn
-
         self.status = 'in CommonFileHandle func.'
 
         if data['path'][-3:] == '.py':
@@ -656,7 +635,7 @@ class ServerResponse:
 
                     if not Mode304:
                         #客户端没有进行缓存
-                        Logger.info(self.inHTTP2)
+                        #Logger.info(self.inHTTP2)
                         cont = f.read(self.cachesize)
                         while not cont == b'':
                             if self.inHTTP2:
@@ -680,7 +659,7 @@ class ServerResponse:
         else:
             self.err("404")
 
-    @profile
+
     def err(self, type_, exception='', detail=''):
         if not self.inHTTP2:
 
@@ -710,11 +689,16 @@ class ServerResponse:
                 self.conn.send(header.encode()+self.SingleLineFeed)
                 self.conn.send((ERRPage().format(type_, http_errorcodes[str(type_)][0], http_errorcodes[str(type_)][1])).encode())
         else:
-            self.http2Res.error(type_, exception, detail, self.conn)
-            Logger.error("页面错误:", type_, exception, detail, self.data['path'])
+            self.http2Res.error(type_, self.getFrame(), exception, detail, self.conn)
+            #Logger.error("页面错误:", type_, exception, detail, self.data['path'])
+            Logger.error(f'''页面错误:
+    Type: {type_}
+    Exception: {exception}
+    Path: {self.data['path']}
+    Detail:
+{detail}''')
 
 
-    @profile
     def include(self, path):
         pathx=ServerPath+"/"+os.path.split(self.data['path'])[0]
         path = pathx+"/"+path
@@ -724,7 +708,11 @@ class ServerResponse:
                 u = f.read()
                 
             #globals_var = self.getGlobal()
-            globals_var = self.var
+            if "var" in self.__dict__:
+                globals_var = self.var
+            else:
+                globals_var = self.getGlobal()
+
             s = {}
 
             exec(("import sys;sys.path.append('%s')\n"%pathx)+u, globals_var)
@@ -749,9 +737,14 @@ class ServerResponse:
         self.finish = True
         data = self.cache2.read().encode()
         conn.send(data) if not len(data) == 0 else None
+
+
+    def setPriority(self, priority=1):
+        """用于设置线程优先级，方便调度"""
+        self.priority = priority
         
 
-    def FinishReturn(self, *arg, **args):
+    def printToSocketOrCache(self, *arg, **args):
         "判断是否使用了 finish_header 以 print 直接向 socket 输出"
         conn = self.conn
         if not self.finish:
@@ -769,6 +762,8 @@ class ServerResponse:
                     if getattr(self.conn, "_closed", False):
                         return
                     continue
+
+
     def setDisableETag(self, disabled):
         if disabled:
             self.ETagMode = False
