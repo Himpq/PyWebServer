@@ -50,6 +50,14 @@ safeguard=('Server Safeuard','The server is being maintained.')
 
 [headers]
 .(flv|gif|jpg|jpeg|png|ico|swf)$=('Cache-control', 'max-age=2592000')
+
+[HTTP2]
+SETTINGS_HEADER_TABLE_SIZE=4096
+SETTINGS_MAX_CONCURRENT_STREAMS=100
+SETTINGS_INITAL_WINDOW_SIZE=65535
+SETTINGS_MAX_FRAME_SIZE=16384
+SETTINGS_MAX_HEADER_LIST_SIZE=16384
+
 """.format(os.path.abspath("./Website"), os.path.abspath("./")))
 
 opts = iniToJson("./pws_config.ini")
@@ -61,6 +69,7 @@ NORMAL = 1    #正常
 config = {}
 setting = {}
 http_errorcodes = {}
+http2settings = {}
 
 #[setting]内容会定义于全局变量
 for i in opts['setting'].keys():
@@ -76,6 +85,9 @@ for i in opts['http_errorcodes']:
 #[http_errorcodes]会定义于dict http_errorcodes
     http_errorcodes[i] = opts['http_errorcodes'][i]
 
+for i in opts['HTTP2']:
+    http2settings[i] = int(opts['HTTP2'][i])
+
 
 black_list = [] #IP黑名单
 bind_domains = [] #绑定的域名
@@ -84,6 +96,7 @@ bind_domains = [] #绑定的域名
 ERRPagePath = "./ErrorPages/error.html"
 ERRPageStr = open(ERRPagePath,'r').read()
 ERRPage = lambda:ERRPageStr
+
 def __printContent():
     import json
     print(json.dumps(opts, sort_keys=True, indent=4, separators=(',', ':')))
