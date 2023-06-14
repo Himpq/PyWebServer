@@ -307,6 +307,8 @@ class FrameParser(STR):
         self.data   = None
 
     def get(self, key=None, val=None):
+        if self.getType() == 'Data':
+            return self.data
         if key in self.__dict__:
             return self.__dict__.get(key)
         if self.getType() == "Headers" and key:
