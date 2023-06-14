@@ -61,11 +61,6 @@ class Server:
         self.ssl_context.load_verify_locations(sslPath[2])
         self.ssl_context.set_alpn_protocols(config['support-protocols'])
         #self.ssl_context.verify_mode = ssl.CERT_REQUIRED
-        
-    '''def __setattr__(self, key, val):
-        if 'is_start' in self.__dict__ and self.is_start:
-            raise KeyError("Cannot change any arguments when server is running.")
-        self.__dict__[key] = val'''
 
     def _accept(self):
         ident = 0
@@ -186,7 +181,7 @@ class ServerResponse:
                 if useHTTPS:
                     conn = sslconn
 
-        #self.clearEnvironment(conn, coll, self.frame, True)
+        self.clearEnvironment(conn, coll, self.frame, True)
         self.conn       = conn
         self.collection = coll
 
@@ -194,7 +189,6 @@ class ServerResponse:
 
         #判断是否是 HTTP2 连接，如果是就交由H2R模块进行处理
         if h2r.JudgeH2(self.conn):
-            #Logger.info(self.conn.selected_alpn_protocol())
             h2r.ServerResponseHTTP2(self, self.ident).response()
             self.inHTTP2 = True
             return
@@ -222,14 +216,11 @@ class ServerResponse:
             self.conn.shutdown(socket.SHUT_RD)
             self.connfile.close()
             self.conn.close()
-  
             return 0
 
         if self.data['headers'].get("host") == None or self.data.get("path") == None:
             return
 
-        #Logger.warn(self.data)
-        #Logger.warn(self.ysdata)
         Logger.info("请求路径: ", self.data['headers']['host'] + self.data['path'])
 
         setLog("IP:"+str(self.ip)+"|Path:"+self.data['headers']['host'] + self.data['path'])
@@ -305,8 +296,8 @@ class ServerResponse:
                 import traceback
                 print(e, traceback.format_exc())
         
-    def set_cookie(self, key, val, expires=3600):
-        self.header.set("set-cookie", "%s=%s; Expires=%s;"%(key, val, expires), True)
+    def set_cookie(self, cookieName, cookieValue, expires=3600):
+        self.header.set("set-cookie", "%s=%s; Expires=%s;"%(cookieName, cookieValue, expires), True)
     def set_header(self, key, val):
         self.header.set(key, str(val))
     def set_statuscode(self, code, content): #404, File not found
@@ -324,7 +315,7 @@ class ServerResponse:
         globals_var['set_cookie']       = self.set_cookie
         globals_var["set_header"]       = self.header.set
         globals_var['finish_header']    = lambda: self.finish_header(onHF)
-        globals_var['finish_send']      = lambda: self.finish_send(onEC)
+        #globals_var['finish_send']      = lambda: self.finish_send(onEC)
         globals_var['set_statuscode']   = self.set_statuscode
         globals_var['set_priority']     = self.setPriority
         globals_var["print"]            = lambda *arg, **args: self.printToSocketOrCache(*arg, **args)
@@ -333,7 +324,6 @@ class ServerResponse:
         globals_var['set_disable_etag'] = self.setDisableETag
         globals_var['_POST']            = self.data['postdata']
         globals_var['_GET']             = self.data['getdata']
-        globals_var['_REWRITE']         = self.data['rewritedata']
         globals_var['_COOKIE']          = self.data['cookie']
         globals_var['_HEADER']          = self.data['headers']
         globals_var['Logger']           = Logger
@@ -359,12 +349,9 @@ class ServerResponse:
             self.CommonFileHandle(data, glo={"_FILE":x[0], "_DATA":x[1]})
         return
 
-
     @priorityHigh
     def PythonFileHandle(self, data, glo={}, onHeaderFinish=None, onEndCallback=None):
-        conn = self.conn
-
-        self.priority = 0.2
+        conn          = self.conn
         header        = self.header
         self.status   = 'in PythonFileHandle func.'
 
@@ -408,7 +395,7 @@ class ServerResponse:
                 codeCompile = compile(PythonFileCode, '', 'exec')
                 exec(codeCompile, self.var)
 
-                onEndCallback() if onEndCallback else None
+                onEndCallback(self.finish) if onEndCallback else None
                 Logger.error("CODE FINISH")
 
                 del globals_var, PythonFileCode
@@ -463,7 +450,6 @@ class ServerResponse:
 
 
     def PyInHtmlHandle(self, data, glo={}, onHeaderFinish=None):
-        self.priority = 0.2
         realpath = ServerPath+"/"+data['path']
 
         if os.path.isfile(realpath):
@@ -503,18 +489,21 @@ class ServerResponse:
                 ctxs[ID] = p
 
             self.var['print'] = p
-            self.var = dict_inone(self.var, glo)
+            self.var          = dict_inone(self.var, glo)
 
             self.header.set("content-type", "text/html")
 
-            #Logger.error(pycodes)
-
+            #执行代码
             for code in pycodes:
                 c   = code[1]
                 if len(c.split("\n")) == 1: #单行代码
                     c = c.lstrip()
-                exec(c, self.var)
-                content = content.replace(code[0]+code[1]+code[2], ctxs.get(ID, ""), 1)
+                try:
+                    exec(c, self.var)
+                    content = content.replace(code[0]+code[1]+code[2], ctxs.get(ID, ""), 1)
+                except Exception as e:
+                    self.err("codeerror", str(e))
+                    return
 
                 ID += 1
             
@@ -545,7 +534,6 @@ class ServerResponse:
         if os.path.isfile(realpath):
             tsize = os.path.getsize(realpath)  #文件总大小(Total Size)
             size = tsize                       #断点续传需要返回的大小（初始值为文件总大小）
-            Logger.comp('->', realpath, size)
 
             #print(data)
 
@@ -653,8 +641,6 @@ class ServerResponse:
                     Logger.error("[CommonFileHandle] >> ", e)
                     print(traceback.format_exc())
                     f.close()
-                    
-                    
         else:
             self.err("404")
 
@@ -698,7 +684,8 @@ class ServerResponse:
 {detail}''')
 
 
-    def include(self, path):
+    def include(self, path, includeType='var'):
+        "导入模块；includeType: 'var' or 'module'"
         pathx=ServerPath+"/"+os.path.split(self.data['path'])[0]
         path = pathx+"/"+path
 
@@ -716,11 +703,13 @@ class ServerResponse:
 
             exec(("import sys;sys.path.append('%s')\n"%pathx)+u, globals_var)
 
-            """name = os.path.split(path)[1].split('.')[0]
-            self.var[name] = Module(dict_inone(s, globals_var))"""
-            x = dict_inone(s, globals_var)
-            for i in x:
-                self.var[i] = x[i]
+            if includeType == 'module':
+                name = os.path.split(path)[1].split('.')[0]
+                self.var[name] = Module(dict_inone(s, globals_var))
+            else:
+                x = dict_inone(s, globals_var)
+                for i in x:
+                    self.var[i] = x[i]
         else:
             self.err("codeerror", "Cannot find module in path: '%s'"%path)
 
@@ -785,9 +774,9 @@ class Header:
         self.headers["date"] = time.asctime()
         self.headers["server"] = SERVER+VERSION
         
-    def set(self, key, val, diejia=False):
+    def set(self, key, val, isSuperposition=False):
         if key in self.headers:
-            if diejia:
+            if isSuperposition:
                 self.headers[key] += str(val)
                 return
         self.headers[key] = str(val)
