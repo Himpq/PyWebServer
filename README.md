@@ -1,9 +1,10 @@
 # PyWebServer
 ![PyWebServer](http://pws.himpqblog.cn/PyWebServer.png)
 一个的 Python Web 项目，一位初中生闲着没事打着玩的东西  
+请勿用于重要项目开发  
 解码 HTTP2 部分使用了 hpack 模块，其余部分纯socket通讯  
 
-测试IP: [WNetdisk](http://114.55.116.36:99/WNetdisk/)
+//测试IP: [WNetdisk](http://114.55.116.36:99/WNetdisk/)  (由于IP办SSL没有免费渠道已经关闭了)  
 
 [官网以及教程](http://pws.himpqblog.cn) 
 
@@ -25,18 +26,23 @@ python server.py
 ## 文件结构
 第一次启动会在本地目录下新建**temp**和**pws_config.ini**。  
 **ErrorPage**目录内存放**error.html**为当服务器遇到错误时读取使用的错误页面。  
-**logs**目录只会存放一个日志文件，且久了日志文件的大小会非常大。
+**logs**目录存放有控制台日志、HTTP2的对话、访问记录。部分日志会在服务器重启后清空。  
+**temp**目录存放用户上传文件的缓存，缓存会在Python文件执行完毕后删除。  
 
 ## 特性
 * 在本地测试时访问延迟在**500ms**以内
-* ETag 缓存无法直接关闭（懒得写），访问 Python 文件可以通过 `set_disable_etag(True)` 关闭服务器对 Python 文件的 ETag 缓存
+* ETag 缓存无法在配置文件里直接关闭（懒得写），访问 Python 文件可以通过 `set_disable_etag(True)` 关闭服务器对 Python 文件的 ETag 缓存
 * 当使用 ETag 缓存来缓存 Python 页面时服务器会先执行 Python 文件，再根据输出的信息的 sha1 值进行比对。
 * 绑定域名功能已被注释掉
-* 黑名单IP还未实现  
+* 黑名单IP还未实现
+* 对于 HTTP2 的支持较好，HTTP/1.1 可能有些许 bug
+* 还有许多地方有待优化
+
 ### HTTP2
 目前已支持HTTP2协议，需要在配置文件中的```support-protocols```项更改信息```(["spdy/3.1", "h2", "http/1.1"])```，并且开启HTTP2需要HTTPS证书。  
   
-HTTP2基础功能完善，服务器推送与流量窗口未实现（大于流量窗口就发更大的流量窗口过去）。 
+HTTP2基础功能完善，服务器推送未实现。 
+可以通过更改配置文件中的**HTTP2**项内容来控制帧大小、初始流量窗口等。  
   
 由于是测试版本，控制台界面会有很多没删掉的debug信息...
 ### 在 HTML 文档中使用 Python 代码
@@ -87,3 +93,6 @@ ETag 缓存支持设置最小计算缓存大小，小于该大小阈值的文件
 2022-8-26 19:11  
 支持在单端口上绑定HTTP,HTTPS功能，但访问HTTP会强制跳转HTTPS。  
 2022-10-7 12:36
+支持HTTP2特性流量窗口，更新有关HTTP2配置文件的内容
+修复了多线程使得上传文件紊乱的问题
+2023-6-15 00:29
