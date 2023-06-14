@@ -43,6 +43,7 @@ def parsingUpdateFile(connf:socket.socket, boundary:str, conn:socket.socket, dat
     data = parsingCacheFile(caf, boundary)
     return data
 
+
 @profile
 def parsingCacheFile(file:typing.Union[cm.cachefile, cm.h2cachefile], boundary:str):
     """该函数用于解析已被储存到本地的用户上传文件。"""
@@ -54,9 +55,11 @@ def parsingCacheFile(file:typing.Union[cm.cachefile, cm.h2cachefile], boundary:s
     datas = {}
 
     boundary = b"--"+boundary.encode()
-    stop = False
+    stop     = False
+
     while not stop:
         content = file.readline()
+        #Logger.error(content[0:40])
         header = {}
         if content == b'':
             break
@@ -96,14 +99,20 @@ def parsingCacheFile(file:typing.Union[cm.cachefile, cm.h2cachefile], boundary:s
                                                                     'filename':header.get("content-disposition").get("name", "noNameFile")
                                                                    }
 
-                #读取本地文件在 Boundary 之前的部分以此保存文件
+                #如果读取行数读取到了下一个文件的开始，那么就退回
                 while True:
                     line = file.readline()
-                    if line[len(line)-len(boundary)-2:] == boundary+b'\r\n':
+                    '''if line[len(line)-len(boundary)-2:] == boundary+b'\r\n':
                         file.seek(-len(boundary)-2, 1)
                         break
                     elif line[len(line)-len(boundary)-4:] == boundary+b'--\r\n':
                         file.seek(-len(boundary)-4, 1)
+                        stop = True
+                        break'''
+                    if line == boundary+b'\r\n':
+                        file.seek(-len(boundary)-2, 1)
+                        break
+                    if line == boundary+b'--\r\n':
                         stop = True
                         break
                     
@@ -210,7 +219,7 @@ def parsingHeader(connf:socket.SocketIO, conn:socket.socket):
 
                 content += ctx
         except Exception as e:
-            print("Error in parsing header:", e)
+            print("Error in parsing header:", e, ctx)
             content = b''
             
     #防止读取HTTP请求头超时
