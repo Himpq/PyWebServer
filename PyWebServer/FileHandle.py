@@ -331,7 +331,7 @@ class FileHandle:
         globals_var = {}
         globals_var['set_cookie']          = self.set_cookie
         
-        globals_var['finish_header']       = lambda: self.streamOutput_header(onHeaderFinish)
+        globals_var['finish_header']       = lambda: self.finish_header(onHeaderFinish)
         globals_var["print"]               = lambda *arg, **args: self.printToSocketOrCache(*arg, **args)
         globals_var['get_response_header'] = lambda: self.header.headers
 
