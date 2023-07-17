@@ -4,7 +4,7 @@
 请勿用于重要项目开发  
 解码 HTTP2 部分使用了 hpack 模块，其余部分纯socket通讯  
 
-//测试IP: [WNetdisk](http://114.55.116.36:99/WNetdisk/)  (由于IP办SSL没有免费渠道已经关闭了)  
+测试IP: [WNetdisk](http://114.55.116.36:99/)  (使用不被认可的SSL证书）  
 
 [官网以及教程](http://pws.himpqblog.cn) 
 
@@ -65,6 +65,25 @@ print("<h1>Hello World!</h1>")
 ```
 如 PHP 一样可以在任何 HTML 页面中插入代码（尽管后缀名非py，后缀名限制为htm和html），但仍需严格遵守缩进。  
 您无法在一个缩进区块结束代码再在后面另起一段接上，因为除了变量相同，每个```<?py ... ?>```代码块都是独立执行的。
+
+### 魔术导入
+可以通过以下方式使用 include 函数：  
+```python
+from ModuleName import *    # USING_PWS_INCLUDE
+import ModuleName as Name   # USING_PWS_INCLUDE
+from ModuleName import *    # USING_PWS_INCLUDE "C:/PythonModules/"
+import ModuleName as Name   # USING_PWS_INCLUDE "C:/PythonModules/"
+import ModuleName           # USING_PWS_INCLUDE "C:/PythonModules/"
+```
+上面五行在执行过程中将会被替换为：  
+```python
+include('ModuleName.py', VAR)
+include('ModuleName.py', MODULE, asName="Name")
+include('C:/PythonModules//ModuleName.py', VAR, useDirPath=False)
+include('C:/PythonModules//ModuleName.py', MODULE, asName="Name", useDirPath=False)
+include('C:/PythonModules//ModuleName.py', MODULE, asName=None, useDirPath=False)
+```
+
 ### 配置文件更新提醒
 每个版本基本都会有配置文件的更新，由于 PWS 无法检测文件是否更新，需要手动将配置文件删除后再启动服务器重建。
 ## 更新日志
@@ -94,5 +113,11 @@ ETag 缓存支持设置最小计算缓存大小，小于该大小阈值的文件
 支持在单端口上绑定HTTP,HTTPS功能，但访问HTTP会强制跳转HTTPS。  
 2022-10-7 12:36
 支持HTTP2特性流量窗口，更新有关HTTP2配置文件的内容
-修复了多线程使得上传文件紊乱的问题
+修复了多线程使得上传文件紊乱的问题  
 2023-6-15 00:29
+
+* [v8.1] 修复了HTTP/1.1的长连接响应问题，统一了文件命名方式。  
+  更新了导入模块的方式，现在使用 “include” 方法导入模块默认为导入一个集合而非变量的方式。  
+  新增魔术导入的方式。  
+  2023-7-18 00:38
+  
