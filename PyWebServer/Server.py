@@ -47,21 +47,6 @@ class Server:
         self.ssl_context.set_alpn_protocols(config['support-protocols'])
 
     def judgeSSL(self, conn):
-        if isinstance(conn, ssl.SSLSocket):
-            return conn
-        dup = conn.dup()
-        try:
-            sslconn = self.ssl_context.wrap_socket(conn, True, config['ssl-dohandshake'])
-            print(sslconn)
-            return sslconn
-        except ssl.SSLError as e:
-            jumpURL = str(setting['ssljump-domain']).encode()+b':'+str(self.port).encode()
-            redirectContent = b'HTTP/1.1 302 Found\r\nConnection: close\r\nLocation: https://'+jumpURL+b'\r\n\r\n'
-            
-            dup.send(redirectContent)
-            dup.close()
-
-    def judgeSSL2(self, conn):
         if self.ssl and not isinstance(conn, ssl.SSLSocket):
             #进行 SSL 判断
             Logger.error("First connect. need to check ssl.", conn)
@@ -81,7 +66,7 @@ class Server:
                     except:
                         return
                     header = parsingHeaderByString(ctx, noMethod=True)
-                    dup.send(b'HTTP/1.1 302 Do this!\r\nconnection: close\r\nlocation:https://'+((str(setting['ssljump-domain']).encode()+b':'+str(self.server.port).encode()) if not header.get("headers").get('host') else header['headers'].get("host").encode())+(b'/' if not header.get("path") else b'/'+header.get('path').encode())+b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
+                    dup.send(b'HTTP/1.1 302 Do this!\r\nconnection: close\r\nlocation:https://'+((str(setting['ssljump-domain']).encode()+b':'+str(self.port).encode()) if not header.get("headers").get('host') else header['headers'].get("host").encode())+(b'/' if not header.get("path") else b'/'+header.get('path').encode())+b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
                     dup.close()
                     return conn
                 else:
