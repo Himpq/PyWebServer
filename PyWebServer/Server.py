@@ -5,13 +5,13 @@
 """
 
 from Logger import Logger, setLog, initLogThread
-from ServerConfig import ServerPath, ip, port
 from ServerConfig import *
 from ParsingHTTPData import *
 from Functions import *
 from Collection import *
 from threading import Thread, enumerate
 from Version import *
+
 import DispatchThread as DT
 import socket
 import os
@@ -50,7 +50,6 @@ class Server:
         if self.ssl and not isinstance(conn, ssl.SSLSocket):
             #进行 SSL 判断
             Logger.error("First connect. need to check ssl.", conn)
-            dup = conn.dup()
             try:
                 useHTTPS = True
                 sslconn  = self.ssl_context.wrap_socket(conn, server_side=True, do_handshake_on_connect=config['ssl-dohandshake'])
@@ -62,12 +61,14 @@ class Server:
                     Logger.warn("客户端正在请求 HTTP。")
                     useHTTPS = False
                     try:
-                        ctx = dup.recv(1024).decode()
+                        conn = conn.unwrap()
+                        ctx  = conn.recv(1024).decode()
                     except:
                         return
                     header = parsingHeaderByString(ctx, noMethod=True)
-                    dup.send(b'HTTP/1.1 302 Do this!\r\nconnection: close\r\nlocation:https://'+((str(setting['ssljump-domain']).encode()+b':'+str(self.port).encode()) if not header.get("headers").get('host') else header['headers'].get("host").encode())+(b'/' if not header.get("path") else b'/'+header.get('path').encode())+b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
-                    dup.close()
+                    conn.send(b'HTTP/1.1 302 Do this!\r\nconnection: close\r\nlocation:https://'+((str(setting['ssljump-domain']).encode()+b':'+str(self.port).encode()) if not header.get("headers").get('host') else header['headers'].get("host").encode())+(b'/' if not header.get("path") else b'/'+header.get('path').encode())+b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
+                    conn.close()
+                    conn.close()
                     return conn
                 else:
                     Logger.error("证书存在严重问题：", e)
@@ -78,34 +79,42 @@ class Server:
         return conn
     
     def _accept(self):
-        ident = 0
-        from H1Response import ServerResponse
-        from H2Response import ServerResponseHTTP2, JudgeH2
+        self.ident = 0
+        
         while self.isStart:
-            ident += 1
+            self.ident += 1
             try:
                 conn, addr = self.socket.accept()
-                conn = self.judgeSSL2(conn) if self.ssl else conn
                 
-                if conn == None:
-                    continue
-
-                if JudgeH2(conn):
-                    http2response = ServerResponseHTTP2(self, addr, conn, ident)
-                    http2response.response()
-                    continue
-
-                obj        = ServerResponse(addr, ident, self, conn)
-                globals()['obj'][ident] = obj
-
-                user       = Thread(target=obj.response)
-                DT.addThread(user, useLock=False)
-
-                Logger.info("接收来自", addr, "的请求 | ID:", ident)
+                self.createResponse(conn, addr, self.ident)
             
             except Exception as e:
                 Logger.error(e)
-                return
+                continue
+
+    @DT.useThread(priority=2)
+    def createResponse(self, conn, addr, ident):
+        from H1Response import ServerResponse
+        from H2Response import ServerResponseHTTP2, JudgeH2
+        
+        conn = self.judgeSSL(conn) if self.ssl else conn
+                
+        if conn == None:
+            return
+
+        if JudgeH2(conn):
+            http2response = ServerResponseHTTP2(self, addr, conn, ident)
+            http2response.response()
+            return
+
+        obj        = ServerResponse(addr, ident, self, conn)
+        globals()['obj'][ident] = obj
+
+        user       = Thread(target=obj.response)
+        DT.addThread(user, useLock=False)
+
+        Logger.info("接收来自", addr, "的请求 | ID:", ident)
+        
 
     def start(self):
         Logger.comp("服务器启动。")
@@ -115,6 +124,13 @@ class Server:
 
         self.socket   = socket.socket()
         self.socket.bind((self.ip, self.port))
+        
+        # if self.ssl:
+            # self.oSocket = self.socket
+            # self.socket = self.ssl_context.wrap_socket(self.socket, server_side=True, do_handshake_on_connect=config['ssl-dohandshake'])
+        # else:
+            # self.oSocket = self.socket
+
         self.socket.listen(self.maxlisten)
         
         self.acceptThread = Thread(target=self._accept)
