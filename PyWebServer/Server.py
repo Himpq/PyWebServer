@@ -27,6 +27,30 @@ if __name__ == "__main__":
     initLogThread()
     DT.init()
 
+class fakeSocket:
+        def __init__(self, conn, startdata):
+            self.datas = startdata
+            self.conn = conn
+            self.seekC = 0
+
+            for i in dir(self.conn):
+                if i.startswith("__") or i == "recv":
+                    continue
+                self.__setattr__(i, getattr(self.conn, i))
+
+        def recv(self, n):
+            if n > len(self.datas):
+                data = n + self.conn.recv(n-len(self.datas))
+                self.datas = b''
+                print("REC DATA:", data)
+                return data
+            else:
+                
+                data = self.datas[0:n]
+                print("REC DATA:", data)
+                self.datas = self.datas[n:]
+                return data
+
 class Server:
     def __init__(self, ip='localhost', port=80, maxlisten=128):
         self.isStart   = False
@@ -51,6 +75,7 @@ class Server:
             #进行 SSL 判断
             Logger.error("First connect. need to check ssl.", conn)
             try:
+                dup = conn.dup()
                 useHTTPS = True
                 sslconn  = self.ssl_context.wrap_socket(conn, server_side=True, do_handshake_on_connect=config['ssl-dohandshake'])
             except ssl.SSLError as e:
@@ -61,15 +86,26 @@ class Server:
                     Logger.warn("客户端正在请求 HTTP。")
                     useHTTPS = False
                     try:
-                        conn = conn.unwrap()
+                        conn = dup
                         ctx  = conn.recv(1024).decode()
                     except:
                         return
                     header = parsingHeaderByString(ctx, noMethod=True)
-                    conn.send(b'HTTP/1.1 302 Do this!\r\nconnection: close\r\nlocation:https://'+((str(setting['ssljump-domain']).encode()+b':'+str(self.port).encode()) if not header.get("headers").get('host') else header['headers'].get("host").encode())+(b'/' if not header.get("path") else b'/'+header.get('path').encode())+b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
+                    conn.send(b'HTTP/1.1 302 Do this!\r\nconnection: close\r\nlocation:https://'+
+                              (
+                                    (str(setting['ssljump-domain']).encode()+b':'+str(self.port).encode()) 
+                                        if not header.get("headers").get('host') else
+                                    header['headers'].get("host").encode())+
+                              (
+                                    b'/'
+                                        if not header.get("path") else 
+                                    b'/'+header.get('path').encode()
+                              )+
+                              b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
+                    
                     conn.close()
-                    conn.close()
-                    return conn
+                    return
+                
                 else:
                     Logger.error("证书存在严重问题：", e)
                     return
