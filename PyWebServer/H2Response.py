@@ -3,7 +3,7 @@
 
 import socket
 from Functions import dictToKvList, setLogFrs, FrameParser, HeaderParser, isNum, FileType, tryGetErrorDetail, kvListToDict, getBit, getRangeBit, toH1Format, dict_inone
-from ParsingHTTPData import decodeGET, decodePOST, decodeCookie, decodeContentType, parsingCacheFile
+from ParsingHTTPData import HeaderStructure, decodeGET, decodePOST, decodeCookie, decodeContentType, parsingCacheFile
 from ServerConfig import ServerPath
 from ServerConfig import *
 from urllib import parse as uparse
@@ -150,6 +150,7 @@ class ServerResponseHTTP2:
                     C += 1
                 except Exception as e:
                     Logger.error(e, traceback.format_exc())
+                    continue
 
     def sendSettings(self):
         wu = SettingFrame(self, self.conn, 0)
@@ -174,7 +175,7 @@ class ServerResponseHTTP2:
             if frame.getType() == 'Window_Update':
                 self.respondWindowUpdate(frame)
 
-    def respondData(self, dataframe:FrameParser):
+    def respondData(self, dataframe:FrameParser, timeout=5000):
         """Respond data frame (usually uploaded data or post info)"""
         sid = dataframe.getStreamID()
         DT.newLock('file').acquire()
@@ -189,20 +190,36 @@ class ServerResponseHTTP2:
         self.conn.recData += dataframe.getLength()
 
         if dataframe.getFlags() & 0x1 == 0x1:
+
+            # Fix the issue that the header frame in the stream will be recieved later than this data frame.
+            # Causing inability to process POST data.
+            while not timeout == 0:
+                if self.streams.get(sid) and self.streams.get(sid).frame:
+                    break
+                time.sleep(0.001)
+                timeout -= 1
+            else:
+                Logger.error("Timeout:", dataframe)
+                return
+            
             if self.streams.get(sid) and self.streams.get(sid).frame:
                 frame = self.streams.get(sid).frame
                 if frame.get('method').lower() == 'post' and not "multipart/form-data" in frame.get("content-type", "").lower(): #POST 数据
                     self.streamCache[sid].seek(0)
                     postdata              = decodePOST(self.streamCache[sid].read().decode("UTF-8"))
                     self.waitingPost[sid] = postdata
+                    Logger.info(f"{sid} 接收完毕 POST")
+
                 elif "multipart/form-data" in frame.get("content-type", "").lower(): #MULTIPART/FORM-DATA 数据
                     bd                        = decodeContentType(frame.get("content-type", ""))["boundary"]
                     files, datas              = parsingCacheFile(self.streamCache[sid], bd)
                     self.uploadingStream[sid] = files, datas
                     Logger.info(f"{sid} 终止传输文件")
+
                 else:
                     Logger.error(f"[{sid}] 未知的传输格式:", frame.get("content-type"))
                     return
+                
             self.streamCache[sid].clean()
             del self.streamCache[sid]
 
@@ -263,7 +280,7 @@ class ServerResponseHTTP2:
 
         headerFrame.cookie = {} if not headerFrame.get("cookie") else decodeCookie(headerFrame.get("cookie"))
         
-        HeaderData            = HEADER_MODULE.copy()
+        HeaderData            = HeaderStructure()
         HeaderData['cookie']  = headerFrame.get("cookie")
         HeaderData['path']    = headerFrame.get("path")
         HeaderData['headers'] = headerFrame.get().get()
@@ -282,6 +299,7 @@ class ServerResponseHTTP2:
         #POST 请求处理
         if headerFrame.get("method").lower() == 'post' and not dctx.get("boundary", ""):
             HeaderData['postdata'] = self.getPostData(headerFrame.getStreamID())
+            Logger.info(f"[POSTDATA] Post 成功获取到 Dataframe")
 
         #普通文件请求处理
         obj.isHTTP2  = True
