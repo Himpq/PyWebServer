@@ -1,5 +1,5 @@
 # PyWebServer
-![PyWebServer](http://pws.himpqblog.cn/PyWebServer.png)
+![PyWebServer](http://himpqblog.cn/PyWebServer.png)
 一个的 Python Web 项目，一位初中生闲着没事打着玩的东西  
 请勿用于重要项目开发  
 解码 HTTP2 部分使用了 hpack 模块，其余部分纯socket通讯  
