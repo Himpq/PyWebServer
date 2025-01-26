@@ -10,6 +10,15 @@ from ParsingHTTPData import *
 MODULE = 'module'
 VAR    = 'var'
 
+os.path._isfile = os.path.isfile
+
+def isFile(path):
+    if path[-1] == "/" or path[-1] == "\\":
+        return False
+    else:
+        return os.path._isfile(path)
+    
+os.path.isfile = isFile
 
 class Module:
     def __init__(self, dicts, filePath, name):
@@ -24,7 +33,7 @@ class Module:
         return self.__str__()
 
 class FileHandle:
-    def __init__(self, master, conn, connfile, header, data, cache, isHTTP2 = False, PyCloseConnection = False, ETagMode = True):
+    def __init__(self, master, conn, connfile, header, data, cache, isHTTP2 = False, PyCloseConnection = False, ETagMode = bool(config['enable-etag'])):
         self.isHTTP2      = isHTTP2
         self.globals      = {}
         self.streamOutput = False
@@ -64,15 +73,26 @@ class FileHandle:
             uploaddict = {}
         else:
             uploaddict = {"_FILE": uploadFiles[0], "_DATA": uploadFiles[1]}
-            
+        
         self.PythonFileHandle(addEnv = uploaddict)
-        return
+        
+        self.closeAllCacheFiles(uploadFiles[0])
 
+        return
+    
+    def closeAllCacheFiles(self, files):
+        for key in files:
+            Logger.info("关闭文件", files[key].cachefile)
+            files[key].cachefile.close()
+        
+        
     def PyInHtmlHandle(self, glo={}, onHeaderFinish=None):
         realpath = ServerPath+"/"+self.data['path']
         if not os.path.isfile(realpath):
             self.err(404)
             return
+        
+        Logger.info("使用 PyInHtmlHandle 响应：", realpath)
         
         with open(realpath, 'r', encoding='UTF-8') as f:
             content = f.read()
@@ -127,6 +147,8 @@ class FileHandle:
                 return
             ID += 1
 
+        Logger.comp("代码已执行完毕:", realpath)
+
         encodeData = content.encode("UTF-8")
         self.header.set("Content-Length", str(len(encodeData)))
         
@@ -136,29 +158,40 @@ class FileHandle:
             self.conn.send(self.header.encode()+self.SingleLineFeed)
         self.conn.send(encodeData)
 
+        Logger.comp("已发送所有数据。")
+
         if self.isHTTP2:
             self.conn.send(self.LineFeed, 1)
 
-    def CommonFileHandle(self, onHeaderFinish=None, retToPy=True, glo={}):
+    def CommonFileHandle(self, onHeaderFinish=None, retToPy=True, glo={}):  
+        """retToPy: bool 尝试使用 PythonInHTML 响应"""
+
         realpath = ServerPath+"/"+self.data['path']
 
         if self.data['path'][-3:] == '.py':
+            Logger.error("转为py响应。", realpath)
             self.PythonFileHandle(addEnv=glo)
             return
         if self.data['path'][-4:] in ('html', '.htm') and retToPy:
+            Logger.error("转为pyinhtml响应。", realpath, onHeaderFinish)
             self.PyInHtmlHandle(onHeaderFinish=onHeaderFinish, glo=glo)
             return
         if not os.path.isfile(realpath):
-            self.err(404)
-            return
-        
-        Logger.info("Using Common file handle", self.data['path'])
+            Logger.error("文件不存在 404", realpath)
+            if os.path.isfile(realpath[0:-1]):
+                self.err(404, redirect=self.data['path'][0:-1])
+            else:
+                self.err(404) 
+                return
+
+        Logger.info("Using Common file handle", self.data['path'], realpath, os.path.isfile(realpath))
 
         totalSize  = os.path.getsize(realpath)  #文件总大小(Total Size)
         size       = totalSize                  #断点续传需要返回的大小（初始值为文件总大小）
 
         if 'range' in self.data['headers']: 
             #断点续传功能
+            Logger.info("断点续传")
             ranges = getRange(self.data['headers']['range'].split("=")[1].strip())
 
             size = (ranges[1] + 1 if not ranges[1] == '' else size) - ranges[0]
@@ -168,70 +201,83 @@ class FileHandle:
         self.header.set("Content-Type",   FileType(self.data['path']))
         self.header.set("Content-Length", "%s"%size)
         
-        file = open(realpath, 'rb')
+        with open(realpath, 'rb') as file:
 
-        if not  'range' in self.data['headers']:
-            Mode304 = False
-            if not os.path.getsize(realpath) >= config['maxsize-for-etag']: #判断文件大小是否大于配置中设置的最大大小，否则不使用ETag浪费服务器资源。
-                ETag       = getHashByFile(open(realpath, 'rb'))
-                ClientETag = self.data['headers'].get('if-none-match')
-                if ClientETag and ClientETag == ETag:
-                    self.header.set(0, "HTTP/1.1 304 Not Modified")
-                    self.header.remove("Content-Length")
-                    Mode304 = True
-                    if self.isHTTP2:
-                        onHeaderFinish = lambda: self.header.send(5)
+            if not 'range' in self.data['headers']:
+
+                clientHasCached = False
+
+                # ============================
+                if not os.path.getsize(realpath) >= config['maxsize-for-etag'] and self.ETagMode:
+                    #判断文件大小是否大于配置中设置的最大大小，否则不使用ETag浪费服务器资源。
+
+                    Logger.info("使用 ETag...")
+                    ETagValue  = getHashByFile(open(realpath, 'rb'))
+                    ClientETag = self.data['headers'].get('if-none-match')
+
+                    if ClientETag and ClientETag == ETagValue:
+                        self.header.set(0, "HTTP/1.1 304 Not Modified")
+                        self.header.remove("Content-Length")
+                        clientHasCached = True
+                        if self.isHTTP2:
+                            onHeaderFinish = lambda: self.header.send(5)
+
+                    self.header.set("ETag", ETagValue)
+
+                if not self.isHTTP2: #发送响应头
+                    headerEncode = self.header.encode()+self.SingleLineFeed
+                    self.conn.send(headerEncode)
                 else:
-                    self.header.set("ETag", ETag)
+                    onHeaderFinish() if onHeaderFinish else 1
+                
+                # =========================================
 
-            if not self.isHTTP2: #发送响应头
+                if not clientHasCached:  #客户端没有进行缓存
+                    Logger.error("客户端未进行缓存.")
+                    cont = file.read(self.cachesize)
+
+                    while not cont == b'':
+                        self.conn.send(cont, 0) if self.isHTTP2 else self.conn.sendall(cont)
+                        cont = file.read(self.cachesize)
+
+                    self.conn.send(self.LineFeed, 1) if self.isHTTP2 else 0
+
+                    
+                Logger.error("结束响应", realpath)
+                return
+            
+        
+            # 断点续传 Part
+            if not self.isHTTP2:
                 headerEncode = self.header.encode()+self.SingleLineFeed
                 self.conn.send(headerEncode)
             else:
-                onHeaderFinish() if onHeaderFinish else 1
-
-            if not Mode304:  #客户端没有进行缓存
-                cont = file.read(self.cachesize)
-                while not cont == b'':
-                    self.conn.sendall(cont, 0) if self.isHTTP2 else \
-                    self.conn.sendall(cont)
-                    cont = file.read(self.cachesize)
-                self.conn.send(self.LineFeed, 1) if self.isHTTP2 else 0
-
-            file.close()
-            return
-        
-        #断点续传
-        if not self.isHTTP2:
-            headerEncode = self.header.encode()+self.SingleLineFeed
-            self.conn.send(headerEncode)
-        else:
-            onHeaderFinish() if onHeaderFinish else 0
-        
-        file.seek(ranges[0])
-
-        CacheSize     = self.cachesize
-        readTotalSize = size         #断点续传内容的总大小
-        numOfRead     = (readTotalSize // CacheSize) if readTotalSize > CacheSize else 1
-        end           = (readTotalSize - numOfRead * CacheSize) if readTotalSize > CacheSize else 0
-
-        if readTotalSize < CacheSize:#缓存部分大于返回的数据大小
-            CacheSize = readTotalSize
-
-        for i in range(numOfRead+1):
-            try:
-                d = file.read(CacheSize if not i == numOfRead else end)
-                self.conn.sendall(d)
-            except Exception as e:
-                file.close()
-                return
+                onHeaderFinish() if onHeaderFinish else 0
             
-        if self.isHTTP2:
-            self.conn.send(self.LineFeed, 1)
-        else:
-            self.conn.send(self.LineFeed) if not self.LineFeed == b'' else None
-        file.close()
-        return
+            file.seek(ranges[0])
+
+            CacheSize     = self.cachesize
+            readTotalSize = size          #断点续传内容的总大小
+            numOfRead     = (readTotalSize // CacheSize) if readTotalSize > CacheSize else 1
+            end           = (readTotalSize - numOfRead * CacheSize) if readTotalSize > CacheSize else 0
+
+            if readTotalSize < CacheSize: #缓存部分大于返回的数据大小
+                CacheSize = readTotalSize
+
+            for i in range(numOfRead+1):
+                try:
+                    d = file.read(CacheSize if not i == numOfRead else end)
+                    self.conn.sendall(d)
+                except Exception as e:
+                    file.close()
+                    return
+                
+            if self.isHTTP2:
+                self.conn.send(self.LineFeed, 1)
+            else:
+                self.conn.send(self.LineFeed) if not self.LineFeed == b'' else None
+
+            return
     
     def check(self):
         #设置上用户自定义的响应头
@@ -255,9 +301,10 @@ class FileHandle:
             return
         
         if config['python'] == False: #判断配置文件是否禁用了 Python web功能
+            Logger.error("禁用了PythonInHTML功能。")
             return
         
-        Logger.info("Using Python Handle")
+        Logger.info("Using Python Handle", self.conn)
 
         if self.Py_CloseConnection:
             self.header.remove("connection")
@@ -300,11 +347,12 @@ class FileHandle:
             if ClientETag and ClientETag == ETag:
                 header.set(0, "HTTP/1.1 304 Not Modified")
                 header.remove("Content-Length")
+
                 Mode304 = True
                 if self.isHTTP2:
                     onHeaderFinish = lambda: header.send(5)
-            else:
-                header.set("ETag", ETag)
+
+            header.set("ETag", ETag)
 
         if not self.isHTTP2:  #发送响应头
             self.conn.send(header.encode() + self.SingleLineFeed)
@@ -457,7 +505,7 @@ class FileHandle:
                     self.conn.send(v+(sep if not i == len(arg)-1 else b''))
                 except Exception as e:
                     Logger.error("Sending data without cache error.")
-                    Logger.error(e)
+                    raise e
             try:
                 self.conn.send(end)
             except:
@@ -469,18 +517,25 @@ class FileHandle:
         else:
             self.ETagMode = True
 
-    def err(self, type_, exception='', detail='', lineContent=''):
+    def err(self, type_, exception='', detail='', lineContent='', redirect=''):
         if not self.isHTTP2:
 
             header = Header()
             header.set("Content-Type","text/html")
             header.set("Connection", "close")
 
+            if redirect:
+                header.set(0, "HTTP/1.1 301 Found")
+                header.set("Location", redirect)
+                header.set("Content-Length", "0")
+                self.conn.send(header.encode()+self.SingleLineFeed)
+                return
+
             if type_ == 'codeerror':
                 detail = detail.replace("<", "&lt;").replace(">", "&gt")
                 detail = tryGetErrorDetail(detail, ServerPath+"/"+self.data['path'], lineContent)
                 data = (b"<html><head><meta charset='utf-8'></head><body><center><h1>Python Error</h1>"+\
-                        b"<br><font color='red'>Error: </font>"+str(exception).encode()+b"(at line "+str(exception.__traceback__.tb_lineno).encode("UTF-8")+\
+                        b"<br><font color='red'>Error: </font>"+str(exception).encode()+b"(at line "+str(exception.__traceback__.tb_lineno if isinstance(exception, Exception) else exception).encode("UTF-8")+\
                         b")<br></center><div style='margin:30px'>Detail:<br><div style='padding:30px;line-height: 2;'>"+detail.replace("\n", "<br>").encode()+\
                         b"</div></div></body></html>")
                 if not self.streamOutput:
@@ -504,7 +559,7 @@ class FileHandle:
 
             self.conn.close()
         else:
-            self.master.error(type_, self.getFrame(), exception, detail, self.conn, lineContent)
+            self.master.error(type_, self.getFrame(), exception, detail, self.conn, lineContent, redirect)
             Logger.error(f'''页面错误:
     Type: {type_}
     Exception: {exception}
