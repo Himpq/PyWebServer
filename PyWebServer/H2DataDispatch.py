@@ -15,6 +15,8 @@ class DataDispatch:
         self.queue = queue.PriorityQueue()
         self.STOP  = False
         self.tlock = threading.Lock()
+        self.active = False
+        self.timeout = 15
         DT.lock()
         self.id    = len(channels)
         channels[self.id] = self
@@ -32,11 +34,31 @@ class DataDispatch:
         self.thr.start()
 
     def _handle(self):
+        HighPriority = 0
         try:
+            n = 0
             while not self.STOP:
-                task = self.queue.get(timeout=15)
+                n += 1
+                if n >= self.timeout*10000:
+                    raise queue.Empty("Timeout")
+                
+                if HighPriority >= 3:
+                    if not len(self.queue.queue) == 0:
+                        task = self.queue.queue.pop()
+                        task.getlock = True
+                        task.join()
+                        n = 0
+                        # print("Find low priority event!", task.priority, HighPriority)
+                        HighPriority = 0
+                    continue
+                task = self.queue.get(timeout=self.timeout)
                 task.getlock = True
+                if task.priority < 2:
+                    HighPriority += 1
+                # print("HIGH", HighPriority, task.priority)
                 task.join()
+                n = 0
+                time.sleep(self.timeout/10000)
         except queue.Empty:
             Logger.info(self, "Timeout")
             self.kill()
