@@ -130,7 +130,9 @@ class ServerResponseHTTP2:
     @DT.useThread(priority=3)
     def response(self):
         """Handle the frames (used to parsing frames or record frame information and stop streaming)"""
+        print("Waiting for magic...")
         MAGIC     = self.conn.recv(24)
+        print("WaitedMagic:", MAGIC)
         if MAGIC == MagicContent:
             Logger.info("使用 http2 进行通讯")
             C      = 0        #计数器
@@ -156,7 +158,7 @@ class ServerResponseHTTP2:
         wu = SettingFrame(self, self.conn, 0)
         wu.send()
         
-    def respond(self, frames):
+    def respond(self, frames: list[FrameParser]):
         """Choose function to respond every frame"""
         if not self.server.isStart:
             self.goAway()
@@ -165,6 +167,7 @@ class ServerResponseHTTP2:
                 self.respondSetting(frame)
             if frame.getType() == "Headers":
                 self.respondHeader(frame)
+                self.checkWindowSize()
             if frame.getType() == "Ping":
                 self.respondPing(frame)
             if frame.getType() == 'Rst_Stream':
@@ -190,9 +193,6 @@ class ServerResponseHTTP2:
         self.conn.recData += dataframe.getLength()
 
         if dataframe.getFlags() & 0x1 == 0x1:
-
-            # Fix the issue that the header frame in the stream will be recieved later than this data frame.
-            # Causing inability to process POST data.
             while not timeout == 0:
                 if self.streams.get(sid) and self.streams.get(sid).frame:
                     break
@@ -226,12 +226,13 @@ class ServerResponseHTTP2:
     @DT.useThread()
     def checkWindowSize(self):
         """Send window size to client"""
+        Logger.warn("检查 Window Size:", self.settings['SETTINGS_INITAL_WINDOW_SIZE'], self.conn.recData)
         if self.settings['SETTINGS_INITAL_WINDOW_SIZE']*3/4 <= self.conn.recData:
             mainstream = WindowUpdateFrame(self.conn, 0, self)
-            mainstream.send(65535)
+            mainstream.send(11451419)
             for i in self.uploadingStream.keys():
                 wuframe = WindowUpdateFrame(self.conn, i, self)
-                wuframe.send(65535)
+                wuframe.send(11451419)
             self.conn.recData = 0
 
     @DT.useThread()
@@ -244,6 +245,7 @@ class ServerResponseHTTP2:
     def respondWindowUpdate(self, windowFrame:FrameParser):
         if windowFrame.getStreamID() == 0:
             self.conn.window  += windowFrame.get()
+            Logger.comp("Update main window size to", self.conn.window)
         else:
             stream = self.streams.get(windowFrame.SID)
             if stream:
@@ -288,6 +290,7 @@ class ServerResponseHTTP2:
 
         obj.data = HeaderData
 
+        file, data = None, None
         #上传文件进行处理
         dctx = decodeContentType(HeaderData['headers'].get("content-type"))
         if dctx.get("type") == "multipart/form-data" and dctx.get("boundary", None):
@@ -324,8 +327,10 @@ class ServerResponseHTTP2:
         else:
             obj.CommonFileHandle(glo=gloadd, onHeaderFinish=lambda: header.send(4))
 
+        obj.closeAllCacheFiles(file) if file else 0
+
     @DT.useThread()
-    def respondSetting(self, frame):
+    def respondSetting(self, frame: FrameParser):
         """Update HTTP2 Settings that sent by client"""
         if frame.get(0) and frame.get(0).get("valueTo") == 0:
             return
@@ -352,11 +357,21 @@ class ServerResponseHTTP2:
         except:
             self.dispatch.STOP = True
 
-    def error(self, type_, frame, exception='', detail='', conn=None, lineContent=None):
+    def error(self, type_, frame, exception='', detail='', conn=None, lineContent=None, redirect=""):
         """Respond the occurence of unexpected errors."""
         header = HeaderFrame(self.conn, conn.sid, self)
         conn   = conn if conn else self.conn
         path   = os.path.abspath(ServerPath+"/"+frame.get("path"))
+
+        if redirect:
+            header.set(":status", "301")
+            header.set("location", redirect)
+            header.set("content-length", "0")
+            header.send(4)
+
+            conn.send(b'', 1)
+            return
+        
         if type_ == 'codeerror':
             header.set(":status", "500")
             header.send(4)
