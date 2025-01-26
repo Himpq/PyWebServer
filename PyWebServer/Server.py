@@ -27,30 +27,6 @@ if __name__ == "__main__":
     initLogThread()
     DT.init()
 
-class fakeSocket:
-        def __init__(self, conn, startdata):
-            self.datas = startdata
-            self.conn = conn
-            self.seekC = 0
-
-            for i in dir(self.conn):
-                if i.startswith("__") or i == "recv":
-                    continue
-                self.__setattr__(i, getattr(self.conn, i))
-
-        def recv(self, n):
-            if n > len(self.datas):
-                data = n + self.conn.recv(n-len(self.datas))
-                self.datas = b''
-                print("REC DATA:", data)
-                return data
-            else:
-                
-                data = self.datas[0:n]
-                print("REC DATA:", data)
-                self.datas = self.datas[n:]
-                return data
-
 class Server:
     def __init__(self, ip='localhost', port=80, maxlisten=128):
         self.isStart   = False
@@ -71,48 +47,77 @@ class Server:
         self.ssl_context.set_alpn_protocols(config['support-protocols'])
 
     def judgeSSL(self, conn):
+        """
+        判断并处理 SSL/TLS 连接。
+
+        Args:
+            conn: 当前的 socket 连接对象。
+        
+        Returns:
+            处理后的连接对象（可能是原始连接或 SSL 包装后的连接）。
+        """
         if self.ssl and not isinstance(conn, ssl.SSLSocket):
-            #进行 SSL 判断
-            Logger.error("First connect. need to check ssl.", conn)
+            Logger.error("First connect. Need to check SSL.", conn)
             try:
+                # 复制原始连接以备处理错误时恢复使用
                 dup = conn.dup()
-                useHTTPS = True
-                sslconn  = self.ssl_context.wrap_socket(conn, server_side=True, do_handshake_on_connect=config['ssl-dohandshake'])
+                use_https = True
+
+                # 尝试将连接升级为 SSL/TLS
+                ssl_conn = self.ssl_context.wrap_socket(
+                    conn, 
+                    server_side=True, 
+                    do_handshake_on_connect=config.get('ssl-dohandshake', True)
+                )
             except ssl.SSLError as e:
+                # 处理 SSL 错误
                 if "CERTIFICATE_UNKNOWN" in str(e):
-                    Logger.warn("证书存在问题：", str(e))
-                    return
+                    Logger.warn("Certificate issue: ", str(e))
+                    return None  # 不返回连接，避免继续操作无效的 SSL 连接
                 elif "http request" in str(e):
-                    Logger.warn("客户端正在请求 HTTP。")
-                    useHTTPS = False
+                    Logger.warn("Client is making an HTTP request.")
+                    use_https = False
+
                     try:
+                        # 恢复原始连接并解析请求头
                         conn = dup
-                        ctx  = conn.recv(1024).decode()
-                    except:
-                        return
-                    header = parsingHeaderByString(ctx, noMethod=True)
-                    conn.send(b'HTTP/1.1 302 Do this!\r\nconnection: close\r\nlocation:https://'+
-                              (
-                                    (str(setting['ssljump-domain']).encode()+b':'+str(self.port).encode()) 
-                                        if not header.get("headers").get('host') else
-                                    header['headers'].get("host").encode())+
-                              (
-                                    b'/'
-                                        if not header.get("path") else 
-                                    b'/'+header.get('path').encode()
-                              )+
-                              b'\r\n\r\n<h1>HELLO!</h1>\r\n\r\n')
-                    
-                    conn.close()
-                    return
-                
+                        ctx = conn.recv(1024).decode()
+                        header = parsingHeaderByString(ctx, noMethod=True)
+
+                        # 生成 302 跳转响应
+                        redirect_host = (
+                            str(setting['ssljump-domain']).encode() + b':' + str(self.port).encode()
+                            if not header.get("headers", {}).get('host') 
+                            else header['headers'].get("host").encode()
+                        )
+                        redirect_path = (
+                            b'/'
+                            if not header.get("path") 
+                            else b'/' + header.get('path').encode()
+                        )
+                        response = (
+                            b'HTTP/1.1 302 Found\r\n'
+                            b'Connection: close\r\n'
+                            b'Location: https://' + redirect_host + redirect_path + 
+                            b'\r\n\r\n<h1>Redirecting to HTTPS!</h1>\r\n\r\n'
+                        )
+                        conn.send(response)
+                    except Exception as recv_err:
+                        Logger.error("Error handling HTTP request: ", recv_err)
+                    finally:
+                        # 确保连接关闭
+                        conn.close()
+                    return None
                 else:
-                    Logger.error("证书存在严重问题：", e)
-                    return
+                    Logger.error("Severe SSL issue: ", e)
+                    return None
             else:
-                if useHTTPS:
-                    conn = sslconn
+                # 如果 SSL 连接成功，将其替换为新连接
+                if use_https:
+                    conn = ssl_conn
+
         return conn
+
     
     def _accept(self):
         self.ident = 0
