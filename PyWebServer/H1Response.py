@@ -93,6 +93,9 @@ class ServerResponse:
         self.conn               = conn
         self.connfile           = conn.makefile('rb')
 
+        self.data:         typing.Union[HeaderStructure, None] = None
+        self.originalData: bytes                               = None
+
     def initFileHandle(self):
         from FileHandle import FileHandle
         self.fileHandle = FileHandle(self, self.conn, self.connfile, self.header, None, self.cache, False)
@@ -101,9 +104,6 @@ class ServerResponse:
         self.fileHandle.originalData       = self.originalData
 
     def response(self, alreadyKeepAlive=0):
-        
-        self.data         = None #处理数据(处理后的list(即py文件中的_DATA))
-        self.originalData = None #原始数据(未经处理的请求头)(bytes->string)
 
         if not self.getHTTPHeader():
             return
@@ -136,7 +136,8 @@ class ServerResponse:
         if not alreadyKeepAlive >= int(config['keep-alive-max']):
             Logger.info("Preparing next long connection...")
             newRes = ServerResponse(self.ip, self.ident, self.server, self.conn)
-            newRes.response(alreadyKeepAlive+1)
+            # newRes.response(alreadyKeepAlive+1)
+            DT.addThread(newRes.response(alreadyKeepAlive+1))
         else:
             self.conn.close()
             Logger.warn("[长连接] 最大单链接处理上限。")
@@ -150,7 +151,7 @@ class ServerResponse:
         self.getdatathread.start()
         self.getdatathread.join(config['timeout'])
 
-        if self.originalData == None and (self.data == None or self.data == HEADER_MODULE):
+        if self.originalData == None and (self.data == None or self.data.path == None):
             try:
                 stop_thread(self.getdatathread)
                 self.conn.send(b'\r\n\r\n')
