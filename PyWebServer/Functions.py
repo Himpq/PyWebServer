@@ -1,18 +1,18 @@
 
-import inspect, ctypes
+
 from io import *
+import json
+from typing import Any
 import gzip
 import hashlib
 import re
 import time, os
-from typing import Any
 import CacheModule as cm
 import typing
-
+import inspect, ctypes
 
 HashCacheSize = 4096*1024*2
-LOG = False
-NOT_RECORDED_FUNCTIONS = ['parsingHeaderLine']
+
 
 #获取文件的base64编码
 def getFileBase64(path):
@@ -132,7 +132,8 @@ def getRange(rangefield):
 
 #洁净输出json
 def prettyPrint(dictobj:dict, ret=False):
-    return str(dictobj)
+    import json
+    return json.dumps(dictobj, indent=4)
     if isinstance(dictobj, dict):
         import json
         res = (json.dumps(dictobj, sort_keys=True, indent=4, separators=(',', ':')))
@@ -355,6 +356,8 @@ class UploadFileObject:
         self.cachefile = cachefile
     def getFile(self):
         return self.cachefile
+    def getName(self):
+        return self.filename
     def __getitem__(self, key):
         if getattr(self, key):
             return getattr(self, key)
@@ -366,7 +369,7 @@ class UploadFileObject:
         return object.__getattribute__(self, key)
 
 class UploadFilesObject:
-    """Uploaded files structure class (a collection of UploadFIleObject)"""
+    """Uploaded files structure class (a collection of UploadFileObject)"""
     def __init__(self, files):
         self.dict = files
         for i in files:
@@ -392,18 +395,45 @@ class UploadDatasObject(UploadFilesObject):
 def encodeIncludeCode(code):
     code    = code.replace("from IgnoreVariable import *", "", 1)
 
+    # from xxx import * # USING_PWS_INCLUDE RELATIVE_PATH ./dir/" (通过相对路径导入)
+    imports = re.findall(r"from (.*?) import \*(.*?)# USING_PWS_INCLUDE RELATIVE_PATH \"(.*?)\"", code)
+    for arg in imports:
+        originCode = f"from {arg[0]} import *{arg[1]}# USING_PWS_INCLUDE RELATIVE_PATH \"{arg[2]}\""
+        changeCode = f"include('{arg[2]}/{arg[0]}.py', VAR, useDirPath=True)"
+        code = code.replace(originCode, changeCode, 1)
+
+    # import xxx (as xxx) # USING_PWS_INCLUDE RELATIVE_PATH "./dir/" (通过相对路径导入)
+    imports = re.findall(r"import (.*?)# USING_PWS_INCLUDE RELATIVE_PATH \"(.*?)\"", code)
+    for arg in imports:
+        originCode = f"import {arg[0]}# USING_PWS_INCLUDE RELATIVE_PATH \"{arg[1]}\""
+        arg    = list(arg)
+        arg[0] = arg[0].strip()
+        asName = arg[0].split("as")
+        if len(asName) > 1:
+            arg[0] = asName[0].strip()
+            asName = '"'+"as".join(asName[1:]).strip()+'"'
+        else:
+            asName = None
+        changeCode = f"include('{arg[1]}/{arg[0]}.py', MODULE, asName={asName})"
+        code = code.replace(originCode, changeCode, 1)
+
+    
+
+    # from xxx import * # USING_PWS_INCLUDE "./Website/dir/" (通过绝对路径导入)
     imports = re.findall(r"from (.*?) import \*(.*?)# USING_PWS_INCLUDE(.*?)\"(.*?)\"", code)
     for arg in imports:
         originCode = f"from {arg[0]} import *{arg[1]}# USING_PWS_INCLUDE{arg[2]}\"{arg[3]}\""
         changeCode = f"include('{arg[3]}/{arg[0]}.py', VAR, useDirPath=False)"
         code = code.replace(originCode, changeCode, 1)
 
+    # from xxx import * # USING_PWS_INCLUDE (通过相对路径导入)
     imports = re.findall(r"from (.*?) import \*(.*?)# USING_PWS_INCLUDE", code)
     for moduleName in imports:
         originCode = f"from {moduleName[0]} import *{moduleName[1]}# USING_PWS_INCLUDE"
         changeCode = f"include('{moduleName[0]}.py', VAR)"
         code = code.replace(originCode, changeCode, 1)
 
+    # import xxx # USING_PWS_INCLUDE "./Website/dir/" (通过相对路径导入)
     imports = re.findall(r"import (.*?)# USING_PWS_INCLUDE(.*?)\"(.*?)\"", code)
     for arg in imports:
         originCode = f"import {arg[0]}# USING_PWS_INCLUDE{arg[1]}\"{arg[2]}\""
@@ -417,7 +447,8 @@ def encodeIncludeCode(code):
             asName = None
         changeCode = f"include('{arg[2]}/{arg[0]}.py', MODULE, asName={asName}, useDirPath=False)"
         code = code.replace(originCode, changeCode, 1)
-        
+    
+    # import xxx # USING_PWS_INCLUDE (通过相对路径导入)
     imports = re.findall(r"import (.*?)# USING_PWS_INCLUDE", code)
     for arg in imports:
         moduleName = arg.strip()
@@ -432,7 +463,6 @@ def encodeIncludeCode(code):
         code = code.replace(originCode, changeCode, 1)
 
     return code
-
 
 def setLogFrs(frames:typing.List[FrameParser, ], self, Logger):
     """Record each frames"""
@@ -483,3 +513,7 @@ def setLogFrs(frames:typing.List[FrameParser, ], self, Logger):
                -->  content:
                               {ctx}\n
 """, "./logs/h2.log", 0)
+
+
+g = {'getdata': {}, 'postdata': {}, 'rewritedata': {}, 'headers': {'path': '/', 'method': 'GET', 'host': 'localhost:5050', 'connection': 'keep-alive', 'cache-control': 'max-age=0', 'sec-ch-ua': '"Not.A/Brand";v="8", "Chromium";v="114", "Microsoft Edge";v="114"', 'sec-ch-ua-mobile': '?0', 'sec-ch-ua-platform': '"Windows"', 'upgrade-insecure-requests': '1', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.79', 'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7', 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate', 'sec-fetch-user': '?1', 'sec-fetch-dest': 'document', 'referer': 'http://localhost:5050/userprof.py', 'accept-encoding': 'gzip, deflate, br', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6', 'cookie': {'User_LOGIN': 'Himpqd4dbe1cce09b169659ec259fdc6b8eca'}, 'if-none-match': '3bd2e98dc37a02a74353d59b091a699ec1b005dc', 'content-length': '4640', 'content-type': 'multipart/form-data', 'boundary': '----WebKitFormBoundary4lRAOPD5C4705JCK', 'x-requested-with': 'XMLHttpRequest', 'origin': 'http://localhost:5050'}, 'path': '/', 'language': '', 'cookie': {'User_LOGIN': 'Himpqd4dbe1cce09b169659ec259fdc6b8eca'}, '_originPath': '/'}
+#prettyPrint(g)
