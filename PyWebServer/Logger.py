@@ -91,16 +91,21 @@ lock = DT.newLock("Logger")
 
 if platform.system() == "Windows":
     sohandle = ctypes.windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+else:
+    sohandle = False
     
 class Logger:
     def __init__(self, s="Server"):
         self.s = s
         
     def set_color(self, color, handle=sohandle):
+        if handle == False:
+            return
+        
         self.bool = ctypes.windll.kernel32.SetConsoleTextAttribute(handle, color)
 
     def cprint(self, mess, color, **arg):
-        if showColor:
+        if showColor and sohandle:
             self.set_color(color)
             print(mess, **arg)
             self.reset()
