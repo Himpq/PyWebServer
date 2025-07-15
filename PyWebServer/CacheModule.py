@@ -1,11 +1,12 @@
-# Cache Module
-# By Himpq
+
 import os
 import random
-import threading
 import time
 import io
-nx=0
+
+
+DISK   = 0x1
+MEMORY = 0x4
 
 def randomGenerateFileName():
     s = time.ctime()
@@ -20,12 +21,8 @@ def returnRandomName(checkpath):
             continue
         return s
 
-DISK = 0x1
-MEMORY = 0x4
-
 class h2cachefile:
     def __init__(self, path="./temp", save=DISK):
-        global nx
         self.saveType = save
         if save == DISK:
             s = returnRandomName(path+"/%.temp")
@@ -33,7 +30,6 @@ class h2cachefile:
             self.file = open(self.path, 'wb')
             self.file.close()
             self.file = open(self.path, 'wb+')
-            nx += 1
         else:
             self.file = io.BytesIO()
             self.path = ''
@@ -84,7 +80,6 @@ class h2cachefile:
 
 class cachefile:
     def __init__(self, path='./temp'):
-        global nx
         rdname = returnRandomName(path+"/%.temp")
         self.path = path+"/"+rdname+".temp"
         self.originPath = self.path
@@ -92,8 +87,6 @@ class cachefile:
         self.file.close()
         self.file = open(self.path,'wb+')
         self.writelen = 0
-        
-        nx+=1
     def write(self, ctx):
         assert type(ctx) == bytes, "Must be a bytes type like."
         self.file.write(ctx)
@@ -123,15 +116,18 @@ class cachefile:
     def readline(self):
         return self.file.readline()
     def move(self, path):
-        self.seek(0)
-        r=self.read(1024*4)
-        with open(path, 'wb') as f:
-            while not r==b'':
-                f.write(r)
-                r = self.read(1024*4)
-        self.clean()
-        self.file = open(path, 'ab+')
-        self.path = path
+        try:
+            self.seek(0)
+            r=self.read(1024*4)
+            with open(path, 'wb') as f:
+                while not r==b'':
+                    f.write(r)
+                    r = self.read(1024*4)
+            self.clean()
+            self.file = open(path, 'ab+')
+            self.path = path
+        except Exception as e:
+            print("Move file error:",e, path)
     def delete(self, length):
         """delete length(end)"""
         upseek = self.file.tell()
@@ -155,4 +151,42 @@ class cachefile:
         except:
             pass
 
+class FileCache:
+    def __init__(self, trueFile=False):
+        self.file = '' if not trueFile else None
+    def write(self, data):
+        self.file += data
+    def save(self):
+        pass
+    def read(self):
+        return self.file
 
+if __name__ == "__main__":
+    g = cachefile()
+    p = h2cachefile(save=DISK)
+
+    g.write(b"WC")
+    p.write(b"WCTOO")
+
+    g.save()
+    p.save()
+
+    g.seek(0)
+    p.seek(0)
+
+    print(g, p)
+    print(g.read(), p.read())
+
+    g.write(b'WC2')
+    p.write(b'wc3')
+
+    g.save()
+    p.save()
+
+    g.seek(0)
+    p.seek(0)
+
+    print(g.read(), p.read())
+
+    g.clean()
+    p.clean()
