@@ -98,7 +98,7 @@ class ServerResponse:
 
     def initFileHandle(self):
         from FileHandle import FileHandle
-        self.fileHandle = FileHandle(self, self.conn, self.connfile, self.header, None, self.cache, False)
+        self.fileHandle = FileHandle(self, self.conn, self.connfile, self.header, None, self.cache, False, collection=self.server.coll)
         self.fileHandle.Py_CloseConnection = self.Py_CloseConnection
         self.fileHandle.data               = self.data
         self.fileHandle.originalData       = self.originalData
@@ -130,6 +130,7 @@ class ServerResponse:
 
         if not self.data.headers.get("connection") == 'keep-alive' or self.Py_CloseConnection:
             Logger.warn("Close connection.")
+            self.connfile.close()
             self.conn.close()
             return
         
