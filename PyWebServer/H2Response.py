@@ -227,12 +227,12 @@ class ServerResponseHTTP2:
     def checkWindowSize(self):
         """Send window size to client"""
         Logger.warn("检查 Window Size:", self.settings['SETTINGS_INITAL_WINDOW_SIZE'], self.conn.recData)
-        if self.settings['SETTINGS_INITAL_WINDOW_SIZE']*3/4 <= self.conn.recData:
+        if self.settings['SETTINGS_INITAL_WINDOW_SIZE'] <= self.conn.recData:
             mainstream = WindowUpdateFrame(self.conn, 0, self)
-            mainstream.send(11451419)
-            for i in self.uploadingStream.keys():
+            mainstream.send(65536)
+            for i in self.streams.keys():
                 wuframe = WindowUpdateFrame(self.conn, i, self)
-                wuframe.send(11451419)
+                wuframe.send(65536)
             self.conn.recData = 0
 
     @DT.useThread()
@@ -264,7 +264,7 @@ class ServerResponseHTTP2:
         from FileHandle import FileHandle
         path   = uparse.unquote(headerFrame.get(":path"))
         header = HeaderFrame(self.conn, headerFrame.getStreamID(), self)
-        obj    = FileHandle(self, None, None, None, None, cm.FileCache(), True)
+        obj    = FileHandle(self, None, None, None, None, cm.FileCache(), True, collection=self.server.coll)
 
         setLog("[ HTTP2 ] IP: "+str(self.ip)+"   |   Path: "+path)
 
