@@ -1,106 +1,87 @@
 
 import os
 from Functions import iniToJson, prettyPrint
+from ConfigCreator import *
 
-if os.path.isdir(",/temp"):
-    os.mkdir("./temp")
-
-if not os.path.isfile("./pws_config.ini"):
-    with open("./pws_config.ini", 'w', encoding='utf-8') as f:
-        f.write("; PyWebServer Config\n")
-        f.write("""
-[setting]
-ServerPath={0}
-InstallPath={1}
-ip=("")
-port=80
-ssl=false
-ssljump-domain=localhost
-
-[config]
-ranges-download=true
-default-page=('index.html','index.htm','index.py')
-python=true
-raise-error=true
-timeout=5
-keep-alive-max=20
-cachesize=409600
-server-status=NORMAL
-errorpage-path=./ErrorPages/error.html
-ssl-path=('cert.crt','key.key','ca.crt')
-ssl-password=
-ssl-dohandshake=true
-maxsize-for-etag=(1024*1024*100)
-support-protocols=(["spdy/3.1", "http/1.1"])
-threadpool-maxsize=100
-collection-expire-time=300
-session-expire-time=600
-
-[black_list]
-blacklist=
-
-[http_errorcodes]
-503=('Server Unavailable','Server overload or maintenance in progress. Please wait for administrator to maintain or visit later.')
-404=('Not Found','Page is not found.')
-safeguard=('Server Safeuard','The server is being maintained.')
-
-[headers]
-.(flv|gif|jpg|jpeg|png|ico|swf)$=('Cache-control', 'max-age=2592000')
-
-[HTTP2]
-SETTINGS_HEADER_TABLE_SIZE=4096
-SETTINGS_MAX_CONCURRENT_STREAMS=100
-SETTINGS_INITAL_WINDOW_SIZE=65535
-SETTINGS_MAX_FRAME_SIZE=16384
-SETTINGS_MAX_HEADER_LIST_SIZE=16384
-
-[logger]
-# types: complete, info, warning, error
-ignore_list=([])
-
-""".format(os.path.abspath("./Website"), os.path.abspath("./")))
+createTempDir()
+createConfig()
 
 ServerPath = None
 InstallPath = None
-
-opts = iniToJson("./pws_config.ini")
-
-#Status:
-SAFEGUARD = 0 #维护
-NORMAL = 1    #正常
-
+ip, port = None, None
+ERRPage = None
 config = {}
 setting = {}
 http_errorcodes = {}
 http2settings = {}
-
-#[setting]内容会定义于全局变量
-for i in opts['setting'].keys():
-    globals()[i] = opts['setting'][i]
-    setting[i]   = opts['setting'][i]
-
-for i in opts['config']:
-#[config]内容会定义于dict config
-    config[i] = opts['config'][i]
-
-
-for i in opts['http_errorcodes']:
-#[http_errorcodes]会定义于dict http_errorcodes
-    http_errorcodes[i] = opts['http_errorcodes'][i]
-
-for i in opts['HTTP2']:
-    http2settings[i] = int(opts['HTTP2'][i])
-
-logger = opts['logger']
-
+opts = None
 
 black_list = [] #IP黑名单
 bind_domains = [] #绑定的域名
 
+logger = None
 
-ERRPagePath = config['errorpage-path']
-ERRPageStr = open(ERRPagePath,'r').read()
-ERRPage = lambda:ERRPageStr
+defaultIniPath = "./pws_config.ini"
+
+def initConfig(iniPath = defaultIniPath):
+    global ServerPath, InstallPath, ip, port, ERRPage, config, setting, http_errorcodes
+    global http2settings, black_list, bind_domains, logger, defaultErrorPage, opts
+    opts = iniToJson(iniPath)
+
+    #[setting]内容会定义于全局变量
+    for i in opts['setting'].keys():
+        globals()[i] = opts['setting'][i]
+        setting[i]   = opts['setting'][i]
+
+    for i in opts['config']:
+    #[config]内容会定义于dict config
+        config[i] = opts['config'][i]
+
+
+    for i in opts['http_errorcodes']:
+    #[http_errorcodes]会定义于dict http_errorcodes
+        http_errorcodes[i] = opts['http_errorcodes'][i]
+
+    for i in opts['HTTP2']:
+        http2settings[i] = int(opts['HTTP2'][i])
+
+    logger = opts['logger']
+
+    defaultErrorPage = '''<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name='viewport' content='width=device-width'>
+        <title>{1} - {0}</title>
+    </head>
+    <body>
+
+        <div style='font-family: Microsoft JhengHei;'>
+            <center>
+                <span>
+                    <img src='/PyWebServer.png' style='width: 40%;'>
+                </span>
+            </center>
+            <div  style='margin-left:20%;'>
+                <h1>{0} {1}</h1>
+                <p>{2}</p>
+            </div>
+        </div>
+
+    </body>
+    </html>
+        
+    '''
+
+    ERRPagePath = config['errorpage-path']
+    if os.path.isfile(ERRPagePath):
+        ERRPageStr = open(ERRPagePath,'r').read()
+        
+    else:
+        ERRPageStr = defaultErrorPage
+
+    ERRPage = lambda:ERRPageStr
+
+initConfig()
 
 def __printContent():
     import json
