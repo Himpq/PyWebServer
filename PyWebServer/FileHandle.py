@@ -33,14 +33,14 @@ class Module:
         return self.__str__()
 
 class FileHandle:
-    def __init__(self, master, conn, connfile, header, data, cache, isHTTP2 = False, PyCloseConnection = False, ETagMode = bool(config['enable-etag'])):
+    def __init__(self, master, conn, connfile, header, data, cache, isHTTP2 = False, PyCloseConnection = False, ETagMode = bool(config['enable-etag']), collection = Coll):
         self.isHTTP2      = isHTTP2
         self.globals      = {}
         self.streamOutput = False
         self.master       = master
         
         self.cachesize              = config['cachesize']
-        self.collection             = Coll
+        self.collection             = collection
         self.header                 = header
         self.data                   = data
         self.cache                  = cache
