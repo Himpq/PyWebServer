@@ -1,2 +1,2 @@
-version = "PWS/8.1 beta"
+version = "PWS/8.2 beta"
 
