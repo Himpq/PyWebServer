@@ -81,8 +81,8 @@ HTTP2 基础功能完善，服务器推送未实现。可以通过更改配置�
 </head>
 <body>
     <?py
-    print("<h1>Hello World!</h1>")
-    ?>
+print("<h1>Hello World!</h1>")
+?>
     <!-- py -->
 </body>
 </html>
