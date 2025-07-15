@@ -88,7 +88,7 @@ class Server:
                         redirect_host = (
                             str(setting['ssljump-domain']).encode() + b':' + str(self.port).encode()
                             if not header.get("headers", {}).get('host') 
-                            else header['headers'].get("host").encode()
+                            else header['headers'].get("host").encode() + b':' + str(self.port).encode()
                         )
                         redirect_path = (
                             b'/'
@@ -123,15 +123,17 @@ class Server:
         self.ident = 0
         
         while self.isStart:
-            self.ident += 1
-            try:
+            
+            # try:
+                self.ident += 1
+                
                 conn, addr = self.socket.accept()
                 
                 self.createResponse(conn, addr, self.ident)
             
-            except Exception as e:
-                Logger.error(e)
-                continue
+            # except Exception as e:
+                # Logger.error(e, "at accept function.")
+                # continue
 
     @DT.useThread(priority=2)
     def createResponse(self, conn, addr, ident):
@@ -149,12 +151,12 @@ class Server:
             return
 
         obj        = ServerResponse(addr, ident, self, conn)
-        globals()['obj'][ident] = obj
+        # globals()['obj'][ident] = obj
 
         user       = Thread(target=obj.response)
         DT.addThread(user, useLock=False)
 
-        Logger.info("接收来自", addr, "的请求 | ID:", ident)
+        Logger.info("[HTTP1.1] 接收来自", addr, "的请求 | ID:", ident)
         
 
     def start(self):
@@ -191,15 +193,6 @@ def startServer():
     server.start()
 
 if __name__ == '__main__':
-
     startServer()
     Logger.comp("[Server] MainPID:", os.getpid())
 
-    while 1:
-        try:
-            g = input(">>> ")
-            if g.strip() == '':
-                continue
-            print(eval(g))
-        except Exception as e:
-            print(e)
