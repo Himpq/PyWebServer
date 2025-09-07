@@ -47,7 +47,11 @@ def work():
     while not STOP:
         thread = ThreadPool.get()
         lock() if thread.useLock else 0
-        thread.obj.start()
+
+        # avoid none object
+        if not thread is None and not getattr(thread, 'obj', None) is None:
+            thread.obj.start()
+            
         release() if thread.useLock else 0
 
 def init():
